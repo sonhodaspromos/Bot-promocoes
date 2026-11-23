@@ -1,0 +1,64 @@
+name: Backup do banco
+
+# O plano gratuito do Supabase NÃO tem backup automático. Este workflow faz um pg_dump por dia,
+# CRIPTOGRAFA com a senha BACKUP_SENHA (AES-256) e guarda como artefato do GitHub por 30 dias.
+# Em repositório público os artefatos podem ser baixados por qualquer pessoa logada no GitHub:
+# por isso o arquivo só sai daqui criptografado. Sem a senha, ele é inútil.
+#
+# Segredos necessários:
+#   SUPABASE_DB_URL  = string de conexão do "Session pooler" (Supabase > Connect), com a senha do banco
+#   BACKUP_SENHA     = senha longa e aleatória, guardada também fora do GitHub (gerenciador de senhas)
+# As credenciais do Vault (chaves de API) NÃO entram no backup: ficam só no Vault e nos Secrets.
+on:
+  schedule:
+    - cron: "41 6 * * *"   # 03:41 em Recife
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Conferir segredos
+        env:
+          DB: ${{ secrets.SUPABASE_DB_URL }}
+          SENHA: ${{ secrets.BACKUP_SENHA }}
+        run: |
+          if [ -z "$DB" ] || [ -z "$SENHA" ]; then
+            echo "::error::Cadastre SUPABASE_DB_URL e BACKUP_SENHA em Settings > Secrets para ativar o backup."; exit 1
+          fi
+          if [ ${#SENHA} -lt 20 ]; then echo "::error::BACKUP_SENHA precisa ter pelo menos 20 caracteres."; exit 1; fi
+      - name: Instalar pg_dump 17 (mesma versão do banco)
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
+          sudo apt-get install -y -qq postgresql-client-17 >/dev/null
+          /usr/lib/postgresql/17/bin/pg_dump --version
+      - name: Gerar backup criptografado
+        env:
+          DB: ${{ secrets.SUPABASE_DB_URL }}
+          SENHA: ${{ secrets.BACKUP_SENHA }}
+        run: |
+          set -o pipefail
+          ARQ="bot-ofertas-$(date -u +%Y%m%d-%H%M).sql.gz.gpg"
+          /usr/lib/postgresql/17/bin/pg_dump "$DB" --schema=public --schema=privado --no-owner --no-privileges \
+            | gzip -9 \
+            | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$SENHA" -o "$ARQ"
+          TAM=$(stat -c %s "$ARQ")
+          if [ "$TAM" -lt 2000 ]; then echo "::error::Backup pequeno demais ($TAM bytes): algo deu errado."; exit 1; fi
+          echo "ARQ=$ARQ" >> "$GITHUB_ENV"
+          echo "Backup gerado: $ARQ ($TAM bytes, criptografado)"
+      - name: Testar se o backup abre (com a senha)
+        env:
+          SENHA: ${{ secrets.BACKUP_SENHA }}
+        run: |
+          gpg --batch --quiet --decrypt --passphrase "$SENHA" "$ARQ" | gunzip | grep -c "CREATE TABLE public\." \
+            | xargs -I{} sh -c 'test {} -ge 16 && echo "✔ backup legível: {} tabelas" || (echo "::error::backup incompleto"; exit 1)'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-banco
+          path: ${{ env.ARQ }}
+          retention-days: 30
+          if-no-files-found: error

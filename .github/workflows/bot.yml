@@ -1,0 +1,47 @@
+name: Bot de ofertas
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # a cada 10 minutos (horários e limites ficam no painel)
+  workflow_dispatch:          # usado pelo botão "Publicar agora" do painel
+    inputs:
+      origem:
+        description: "Origem da rodada"
+        type: choice
+        options: [manual, teste, agendada]
+        default: manual
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bot-de-ofertas
+  cancel-in-progress: false
+
+jobs:
+  rodar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Rodar o bot
+        run: python -m app.main rodar --origem "${{ inputs.origem || 'agendada' }}"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
+          SHOPEE_SECRET: ${{ secrets.SHOPEE_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CANAL: ${{ secrets.TELEGRAM_CANAL }}
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IMGBB_KEY: ${{ secrets.IMGBB_KEY }}

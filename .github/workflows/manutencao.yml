@@ -1,0 +1,26 @@
+name: Manutenção diária
+
+# Expira promoções vencidas e apaga logs antigos (função manutencao_diaria do banco).
+on:
+  schedule:
+    - cron: "17 7 * * *"   # 04:17 em Recife
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manutencao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Rodar manutenção
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          resposta=$(curl -sS -w "\n%{http_code}" -X POST "$SUPABASE_URL/rest/v1/rpc/manutencao_diaria" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" -H "Content-Type: application/json" -d '{}')
+          codigo=$(echo "$resposta" | tail -n1)
+          echo "$resposta" | head -n -1
+          if [ "$codigo" != "200" ]; then echo "Falhou (HTTP $codigo). A migration manutencao_diaria foi aplicada?"; exit 1; fi

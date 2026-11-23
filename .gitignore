@@ -1,0 +1,12 @@
+# segredos
+.env
+.env.*
+!.env.example
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# artes geradas localmente
+backend/saida/
+frontend/testes/capturas/

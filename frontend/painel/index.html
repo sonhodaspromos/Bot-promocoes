@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#EE4D2D">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Painel · Bot de Ofertas</title>
+  <link rel="stylesheet" href="css/painel.css">
+  <script type="importmap">
+    { "imports": { "supabase": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm" } }
+  </script>
+</head>
+<body>
+  <header class="topo">
+    <div>
+      <h1 id="titulo">Bot de Ofertas</h1>
+      <span id="papel" class="papel hide"></span>
+    </div>
+    <div class="topo-acoes">
+      <button id="btn-publicar" class="b claro hide" title="Rodar o bot agora">⚡ Publicar agora</button>
+      <button id="btn-sair" class="b claro hide">Sair</button>
+    </div>
+  </header>
+  <div id="faixa-demo" class="faixa-demo hide" role="status"></div>
+
+  <main id="conteudo" aria-live="polite">
+    <p class="muted centro">Carregando…</p>
+  </main>
+
+  <nav id="nav" class="nav hide" aria-label="Seções">
+    <button data-tela="resumo"><span>📊</span>Resumo</button>
+    <button data-tela="ofertas"><span>🛍️</span>Ofertas</button>
+    <button data-tela="nova" data-precisa="editar"><span>➕</span>Nova</button>
+    <button data-tela="comissoes"><span>💰</span>Comissões</button>
+    <button data-tela="logs"><span>📜</span>Logs</button>
+    <button data-tela="ajustes"><span>⚙️</span>Ajustes</button>
+  </nav>
+  <div id="toast" class="toast" role="alert"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

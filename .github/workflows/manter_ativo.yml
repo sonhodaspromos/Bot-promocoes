@@ -1,0 +1,29 @@
+name: Manter agendamentos ativos
+
+# Em repositório PÚBLICO, o GitHub desliga os agendamentos (cron) depois de 60 dias sem atividade
+# no repositório. O bot não faz commits, então isso aconteceria. Este workflow roda toda semana e
+# reativa os agendamentos pela API do GitHub, o que reinicia a contagem.
+on:
+  schedule:
+    - cron: "23 9 * * 1"   # segunda-feira, 06:23 em Recife
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  manter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Reativar os workflows agendados
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for w in bot.yml manutencao.yml renovar_token.yml backup.yml manter_ativo.yml; do
+            if gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$w/enable" --silent; then
+              echo "✔ $w ativo"
+            else
+              echo "::warning::não consegui reativar $w"
+            fi
+          done
