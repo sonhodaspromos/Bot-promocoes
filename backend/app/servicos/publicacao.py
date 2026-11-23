@@ -24,6 +24,7 @@ from ..logs import Log
 from ..modelos import ConteudoPublicacao, ItemFila, ResultadoValidacao
 from ..repositorio import Repositorio
 from . import arte, textos
+from .cupons import melhor_cupom
 from .comum import agora_utc, ajuste, dentro_do_horario, fuso, inicio_do_dia, num
 from .validacao import LinkTemporariamenteIndisponivel, validar_link
 
@@ -280,6 +281,13 @@ class ServicoPublicacao:
 
     def _montar(self, item, dados, canal, cfg, cache) -> ConteudoPublicacao:
         destaque = canal.codigo == "instagram_feed"
+        dados = dict(dados)
+        try:
+            achado = melhor_cupom(self.repo.cupons_da_promocao(item.promocao_id), float(dados["preco_promocional"]))
+        except ErroBanco:
+            achado = None  # sem a tabela de cupons (migration 016 ausente): publica sem cupom
+        if achado and (not achado[0].demo or dados.get("demo")):
+            dados["cupom_codigo"], dados["preco_com_cupom"] = achado[0].codigo, achado[1]
         foto = arte.abrir_foto(self._foto(dados.get("imagem_url"), cache))
         link = f"{self.url_cliques}?l={item.link_afiliado_id}&c={canal.codigo}"
         if canal.codigo.startswith("instagram"):

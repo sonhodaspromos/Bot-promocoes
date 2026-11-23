@@ -118,7 +118,15 @@ def criar_arte(d: dict, foto: Image.Image, largura: int, altura: int, cfg: dict,
         y += fa.size + 10
     fp = fonte(96 if story else 84, True)
     dr.text((2 * m, y), reais(d["preco_promocional"]), fill=principal, font=fp)
-    dr.text((2 * m, y + fp.size + 18), (d.get("marketplace_nome") or "")[:30], fill="#555555", font=fonte(34, True))
+    y_loja = y + fp.size + 18
+    if d.get("cupom_codigo") and d.get("preco_com_cupom"):
+        fc = fonte(36 if story else 32, True)
+        txt = f"COM O CUPOM {d['cupom_codigo']}: {reais(d['preco_com_cupom'])}"
+        largura_txt = min(dr.textlength(txt, font=fc) + 40, largura - 4 * m)
+        dr.rounded_rectangle((2 * m, y_loja, 2 * m + largura_txt, y_loja + fc.size + 24), radius=16, fill=realce)
+        dr.text((2 * m + 20, y_loja + (fc.size + 24) // 2), txt, fill="black", font=fc, anchor="lm")
+        y_loja += fc.size + 40
+    dr.text((2 * m, y_loja), (d.get("marketplace_nome") or "")[:30], fill="#555555", font=fonte(34, True))
 
     if story:
         bx0, by0, bx1, by1 = m + 40, altura - 210, largura - m - 40, altura - 90
@@ -129,3 +137,149 @@ def criar_arte(d: dict, foto: Image.Image, largura: int, altura: int, cfg: dict,
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=90)
     return buf.getvalue()
+
+
+def criar_arte_cupom(c, foto: Image.Image | None, largura: int, altura: int, cfg: dict) -> bytes:
+    """Arte do cupom/campanha: código em destaque (é o que a pessoa digita no checkout), desconto, mínimo e validade."""
+    principal = cfg.get("visual.cor_principal") or "#EE4D2D"
+    realce = cfg.get("visual.cor_destaque") or "#FFD400"
+    story = altura > largura * 1.5
+    img = Image.new("RGB", (largura, altura), principal)
+    dr = ImageDraw.Draw(img)
+    m = 60
+    cx = largura // 2
+
+    y = 140 if story else 90
+    chamada = "CUPOM DE DESCONTO" if c.tipo == "cupom" else "CAMPANHA DA LOJA"
+    dr.text((cx, y), chamada, fill=realce, font=fonte(64 if story else 56, True), anchor="mm")
+    y += 80
+    dr.text((cx, y), (c.marketplace_nome or c.marketplace or "")[:30], fill="white", font=fonte(44, True), anchor="mm")
+    y += 70
+
+    caixa_y0, caixa_y1 = y, altura - (300 if story else 70)
+    dr.rounded_rectangle((m, caixa_y0, largura - m, caixa_y1), radius=40, fill="white")
+
+    selos = []
+    if c.demo:
+        selos.append(("DEMONSTRAÇÃO", "#6B21A8"))
+    if cfg.get("transparencia.marcar_publi", True):
+        selos.append(("PUBLI", "#222222"))
+    x = m + 20
+    for texto, cor in selos:
+        fs = fonte(26, True)
+        w = dr.textlength(texto, font=fs) + 30
+        dr.rounded_rectangle((x, caixa_y0 + 20, x + w, caixa_y0 + 62), radius=20, fill=cor)
+        dr.text((x + 15, caixa_y0 + 41), texto, fill="white", font=fs, anchor="lm")
+        x += w + 10
+
+    # o conteúdo é desenhado 2 vezes: a 1ª só mede a altura, a 2ª centraliza no cartão
+    rascunho = ImageDraw.Draw(Image.new("RGB", (largura, altura)))
+    topo_util = caixa_y0 + 80
+    altura_conteudo = _conteudo_cupom(rascunho, None, c, foto, largura, topo_util, story, principal, cfg) - topo_util
+    sobra = (caixa_y1 - 40) - topo_util - altura_conteudo
+    _conteudo_cupom(dr, img, c, foto, largura, topo_util + max(0, sobra // 2), story, principal, cfg)
+
+    if story:
+        bx0, by0, bx1, by1 = m + 40, altura - 230, largura - m - 40, altura - 110
+        dr.rounded_rectangle((bx0, by0, bx1, by1), radius=60, fill=realce)
+        dr.text((cx, (by0 + by1) // 2), (cfg.get("textos.rodape_story") or "")[:30], fill="black",
+                font=fonte(46, True), anchor="mm")
+
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    return buf.getvalue()
+
+
+def _conteudo_cupom(dr, img, c, foto, largura, y, story, principal, cfg) -> int:
+    m, cx = 60, largura // 2
+    if foto is not None:
+        f = foto.copy()
+        f.thumbnail((largura - 4 * m, 520 if story else 300))
+        if img is not None:
+            img.paste(f, ((largura - f.width) // 2, y))
+        y += f.height + 30
+
+    ft = fonte(52 if story else 42, True)
+    for linha in quebrar(dr, c.titulo, ft, largura - 4 * m, 2):
+        dr.text((cx, y), linha, fill="#222222", font=ft, anchor="ma")
+        y += ft.size + 10
+    y += 24
+
+    principal_txt, condicoes = _desconto_e_condicoes(c)
+    if principal_txt:
+        fd = fonte(96 if story else 72, True)
+        dr.text((cx, y), principal_txt, fill=principal, font=fd, anchor="ma")
+        y += fd.size + 12
+    if condicoes:
+        # condições (teto, valor mínimo) nunca são cortadas: a fonte diminui até caber
+        tamanho = 40 if story else 34
+        while True:
+            fcnd = fonte(tamanho, True)
+            linhas = _quebrar_sem_cortar(dr, condicoes, fcnd, largura - 4 * m)
+            if len(linhas) <= 3 or tamanho <= 24:
+                break
+            tamanho -= 2
+        for linha in linhas:
+            dr.text((cx, y), linha, fill="#222222", font=fcnd, anchor="ma")
+            y += fcnd.size + 8
+    if principal_txt or condicoes:
+        y += 30
+
+    if c.codigo:
+        fcod = fonte(110 if story else 80, True)
+        w = min(dr.textlength(c.codigo, font=fcod) + 120, largura - 4 * m)
+        h = fcod.size + 80
+        x0 = cx - w // 2
+        dr.rounded_rectangle((x0, y, x0 + w, y + h), radius=24, fill="#FFF7D6", outline="#222222", width=5)
+        dr.text((cx, y + h // 2), c.codigo, fill="#222222", font=fcod, anchor="mm")
+        y += h + 18
+        dr.text((cx, y), "use este código no pagamento", fill="#555555", font=fonte(34 if story else 30), anchor="ma")
+        y += 70
+
+    fv = fonte(40 if story else 36, True)
+    fim_local = c.fim_em.astimezone(fuso_cfg(cfg))
+    dr.text((cx, y), f"Válido até {fim_local:%d/%m} às {fim_local:%H:%M}", fill="#222222", font=fv, anchor="ma")
+    y += fv.size + 18
+    if c.regras:
+        fr = fonte(32 if story else 28)
+        for linha in _quebrar_sem_cortar(dr, c.regras, fr, largura - 4 * m):
+            dr.text((cx, y), linha, fill="#555555", font=fr, anchor="ma")
+            y += fr.size + 8
+    return y
+
+
+def _desconto_e_condicoes(c) -> tuple[str, str]:
+    if not c.desconto_tipo:
+        principal = ""
+    elif c.desconto_tipo == "percentual":
+        principal = f"{c.desconto_valor:g}% OFF".replace(".", ",")
+    else:
+        principal = f"{reais(c.desconto_valor)} OFF"
+    partes = []
+    if c.desconto_maximo:
+        partes.append(f"desconto máximo de {reais(c.desconto_maximo)}")
+    if c.valor_minimo:
+        partes.append(f"em compras acima de {reais(c.valor_minimo)}")
+    return principal, " · ".join(partes)
+
+
+def _quebrar_sem_cortar(draw, texto, f, largura):
+    linhas, atual = [], ""
+    for p in texto.split():
+        teste = (atual + " " + p).strip()
+        if draw.textlength(teste, font=f) <= largura or not atual:
+            atual = teste
+        else:
+            linhas.append(atual)
+            atual = p
+    if atual:
+        linhas.append(atual)
+    return linhas
+
+
+def fuso_cfg(cfg: dict):
+    from zoneinfo import ZoneInfo
+    try:
+        return ZoneInfo(cfg.get("sistema.fuso_horario") or "America/Recife")
+    except Exception:
+        return ZoneInfo("America/Recife")

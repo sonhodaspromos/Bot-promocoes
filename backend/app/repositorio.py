@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from .erros import ErroBanco, ErroIntegracao, RegraViolada
 from .cliente_http import ClienteHTTP
-from .modelos import ItemFila, OfertaEncontrada, ResultadoValidacao
+from .modelos import CampanhaEncontrada, Cupom, ItemFila, OfertaEncontrada, ResultadoValidacao
 
 
 def agora() -> datetime:
@@ -90,6 +90,30 @@ class Repositorio(ABC):
     def publicacoes_desde(self, desde: datetime, tipos: list[str]) -> list[dict]: ...
     @abstractmethod
     def melhor_publicada_desde(self, desde: datetime) -> dict | None: ...
+
+    # ---- cupons e campanhas
+    @abstractmethod
+    def cupons_vigentes(self) -> list[Cupom]:
+        """Cupons/campanhas ativos e dentro da validade, do que vence primeiro ao último."""
+    @abstractmethod
+    def cupons_publicados_no_dia(self, dia: str) -> list[dict]:
+        """Publicações de cupom do dia (data local AAAA-MM-DD): cupom_id, canal_id, resultado, erro."""
+    @abstractmethod
+    def registrar_publicacao_cupom(self, cupom_id: int, canal_id: int, sucesso: bool, id_mensagem: str | None,
+                                   erro: str | None) -> None: ...
+    @abstractmethod
+    def salvar_campanha(self, c: CampanhaEncontrada) -> None:
+        """Cria ou atualiza a campanha (sem mexer no status escolhido pelo dono)."""
+    @abstractmethod
+    def campanhas_atualizadas_desde(self, desde: datetime) -> int: ...
+    @abstractmethod
+    def candidatos_para_cupom(self, cupom: Cupom, limite: int) -> list[dict]:
+        """Ofertas recomendadas pelo motor, da mesma loja, ainda não ligadas ao cupom."""
+    @abstractmethod
+    def sugerir_produto_cupom(self, cupom_id: int, promocao_id: int, motivo: str) -> None: ...
+    @abstractmethod
+    def cupons_da_promocao(self, promocao_id: int) -> list[Cupom]:
+        """Cupons vigentes APROVADOS para a oferta."""
 
     # ---- monitor
     @abstractmethod
@@ -441,6 +465,60 @@ class SupabaseRepositorio(Repositorio):
     def finalizar_execucao(self, execucao_id, status, resumo):
         self._req("PATCH", "execucoes", params={"id": f"eq.{execucao_id}"}, prefer="return=minimal",
                   corpo={"status": status, "finalizada_em": iso(agora()), "resumo": resumo})
+
+    # ---- cupons
+    def cupons_vigentes(self):
+        agora_ = iso(agora())
+        linhas = self._get("vw_cupons_painel", select="*", status="eq.ativo", inicio_em=f"lte.{agora_}",
+                           fim_em=f"gt.{agora_}", order="fim_em.asc", limit="100")
+        return [Cupom.de_linha(l) for l in linhas]
+
+    def cupons_publicados_no_dia(self, dia):
+        return self._get("cupons_publicacoes", select="cupom_id,canal_id,resultado,erro", dia=f"eq.{dia}")
+
+    def registrar_publicacao_cupom(self, cupom_id, canal_id, sucesso, id_mensagem, erro):
+        self._req("POST", "cupons_publicacoes", prefer="return=minimal", corpo={
+            "cupom_id": cupom_id, "canal_id": canal_id, "resultado": "sucesso" if sucesso else "erro",
+            "id_mensagem_externa": id_mensagem, "erro": None if sucesso else (erro or "erro")[:1000]})
+
+    def salvar_campanha(self, c):
+        mkt = next((m for m in self.marketplaces() if m["codigo"] == c.marketplace), None)
+        if not mkt:
+            raise RegraViolada(f"loja {c.marketplace} não cadastrada", codigo="P0020")
+        corpo = {"marketplace_id": mkt["id"], "tipo": "campanha", "origem": "automatica", "id_externo": c.id_externo,
+                 "titulo": c.titulo, "link_afiliado": c.link_afiliado, "fim_em": iso(c.fim_em),
+                 "imagem_url": c.imagem_url if (c.imagem_url or "").startswith("https://") else None}
+        if c.inicio_em and c.inicio_em < c.fim_em:
+            corpo["inicio_em"] = iso(c.inicio_em)
+        self._req("POST", "cupons", params={"on_conflict": "marketplace_id,id_externo"},
+                  prefer="resolution=merge-duplicates,return=minimal", corpo=corpo)
+
+    def campanhas_atualizadas_desde(self, desde):
+        return len(self._get("cupons", select="id", origem="eq.automatica", atualizado_em=f"gte.{iso(desde)}"))
+
+    def candidatos_para_cupom(self, cupom, limite):
+        ja = {l["promocao_id"] for l in self._get("cupons_produtos", select="promocao_id", cupom_id=f"eq.{cupom.id}")}
+        linhas = self._get("vw_promocoes_painel", select="id,titulo,categoria_id,preco_promocional,pontuacao,demo",
+                           marketplace=f"eq.{cupom.marketplace}", status="in.(encontrada,aprovada,publicada)",
+                           classificacao="in.(excelente,boa)", demo=f"is.{str(cupom.demo).lower()}",
+                           order="pontuacao.desc", limit=str(max(limite * 20, 100)))
+        return [l for l in linhas if l["id"] not in ja]
+
+    def sugerir_produto_cupom(self, cupom_id, promocao_id, motivo):
+        self._req("POST", "cupons_produtos", params={"on_conflict": "cupom_id,promocao_id"},
+                  prefer="resolution=ignore-duplicates,return=minimal",
+                  corpo={"cupom_id": cupom_id, "promocao_id": promocao_id, "origem": "sugestao", "aprovado": False,
+                         "motivo": motivo[:200]})
+
+    def cupons_da_promocao(self, promocao_id):
+        agora_ = iso(agora())
+        ids = [l["cupom_id"] for l in self._get("cupons_produtos", select="cupom_id", promocao_id=f"eq.{promocao_id}",
+                                                aprovado="is.true")]
+        if not ids:
+            return []
+        linhas = self._get("vw_cupons_painel", select="*", id=self._in(ids), status="eq.ativo",
+                           inicio_em=f"lte.{agora_}", fim_em=f"gt.{agora_}")
+        return [Cupom.de_linha(l) for l in linhas]
 
     def encerrar_execucoes_orfas(self, minutos=30):
         return int(self._rpc("encerrar_execucoes_orfas", p_minutos=minutos) or 0)

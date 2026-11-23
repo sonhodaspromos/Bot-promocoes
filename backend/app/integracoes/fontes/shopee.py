@@ -13,13 +13,15 @@ import hashlib
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from ...erros import ErroIntegracao
 from ...cliente_http import ClienteHTTP
-from ...modelos import OfertaEncontrada
+from ...modelos import CampanhaEncontrada, OfertaEncontrada
 from ..base import REAL, FonteOfertas
 
 URL = "https://open-api.affiliate.shopee.com.br/graphql"
+CAMPOS_CAMPANHA = "offerName offerLink imageUrl commissionRate collectionId offerType periodStartTime periodEndTime"
 CAMPOS = "itemId productName price priceMin priceMax priceDiscountRate imageUrl offerLink productLink ratingStar sales commissionRate"
 
 
@@ -35,6 +37,7 @@ class ShopeeFonte(FonteOfertas):
     modo = REAL
     suporta_consulta = True
     suporta_comissoes = True
+    suporta_campanhas = True
 
     def __init__(self, app_id: str, secret: str, http: ClienteHTTP | None = None, ordenacao: int = 2,
                  relogio=time.time):
@@ -92,6 +95,13 @@ class ShopeeFonte(FonteOfertas):
         q = 'mutation{generateShortLink(input:{originUrl:%s, subIds:["bot"]}){shortLink}}' % json.dumps(url)
         return ((self.consulta(q).get("generateShortLink") or {}).get("shortLink")) or None
 
+    def campanhas(self, limite=20):
+        """Campanhas oficiais da Shopee (shopeeOfferV2): nome, link de afiliado, imagem e período."""
+        q = f"{{ shopeeOfferV2(sortType: 2, page: 1, limit: {int(limite)}) {{ nodes {{ {CAMPOS_CAMPANHA} }} }} }}"
+        agora = datetime.fromtimestamp(self.relogio(), tz=timezone.utc)
+        nos = ((self.consulta(q).get("shopeeOfferV2") or {}).get("nodes")) or []
+        return [c for c in (campanha_de_no(n, agora) for n in nos) if c]
+
     def comissoes(self, inicio, fim):
         q = ("{conversionReport(purchaseTimeStart:%d, purchaseTimeEnd:%d, limit:500){nodes{conversionId purchaseTime "
              "orders{orderId orderStatus items{itemId itemName itemPrice itemTotalCommission}}}}}"
@@ -120,3 +130,35 @@ class ShopeeFonte(FonteOfertas):
     def testar(self):
         ofertas = self.buscar("fone", limite=1)
         return f"shopee: REAL ✔ API respondeu ({len(ofertas)} oferta de teste)"
+
+
+def _data_unix(v) -> datetime | None:
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    if n > 10**11:  # milissegundos
+        n //= 1000
+    return datetime.fromtimestamp(n, tz=timezone.utc)
+
+
+def campanha_de_no(n: dict, agora: datetime) -> CampanhaEncontrada | None:
+    """Converte um item de shopeeOfferV2. Sem nome ou sem link de afiliado = descartado."""
+    titulo, link = (n.get("offerName") or "").strip(), (n.get("offerLink") or "").strip()
+    if len(titulo) < 3 or not link.startswith("https://"):
+        return None
+    inicio, fim = _data_unix(n.get("periodStartTime")), _data_unix(n.get("periodEndTime"))
+    if fim is None:
+        # a API não informou o fim: vale só até o fim do dia; amanhã a sincronização confirma de novo
+        local = agora.astimezone(ZoneInfo("America/Recife"))
+        fim = local.replace(hour=23, minute=59, second=0, microsecond=0).astimezone(timezone.utc)
+    if fim <= agora or (inicio and inicio > agora + timedelta(days=1)):
+        return None
+    ident = str(n.get("collectionId") or "").strip() or hashlib.sha256(link.encode()).hexdigest()[:20]
+    comissao = _num(n.get("commissionRate"))
+    if comissao is not None and comissao <= 1:  # a API às vezes devolve fração (0.07 = 7%)
+        comissao *= 100
+    return CampanhaEncontrada(marketplace="shopee", id_externo=f"camp-{ident}", titulo=titulo[:120], link_afiliado=link,
+                              fim_em=fim, inicio_em=inicio, imagem_url=(n.get("imageUrl") or None), comissao_pct=comissao)

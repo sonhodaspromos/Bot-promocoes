@@ -7,6 +7,7 @@ const TELAS = {
   resumo: () => import("./telas/resumo.js"),
   ofertas: () => import("./telas/ofertas.js"),
   nova: () => import("./telas/nova.js"),
+  cupons: () => import("./telas/cupons.js"),
   comissoes: () => import("./telas/comissoes.js"),
   logs: () => import("./telas/logs.js"),
   ajustes: () => import("./telas/ajustes.js"),

@@ -55,6 +55,19 @@ const DADOS = {
   ],
   credenciais_integracoes: [{ integracao: "telegram", nome: "TOKEN", dica: "••••a1b2", atualizado_em: agora }],
   promocoes: [],
+  vw_cupons_painel: [
+    { id: 41, marketplace_id: 1, marketplace_codigo: "shopee", marketplace_nome: "Shopee", tipo: "cupom", origem: "manual", titulo: "Cupom de fim de semana",
+      codigo: "ACHADO15", desconto_tipo: "percentual", desconto_valor: 15, valor_minimo: 79, desconto_maximo: 30, link_afiliado: null,
+      regras: "Válido em produtos <b>selecionados</b>", fim_em: new Date(Date.now() + 3 * 86400000).toISOString(), status: "ativo", demo: false,
+      produtos_aprovados: 1, sugestoes: 1, publicacoes: 2, ultima_publicacao: agora },
+    { id: 42, marketplace_id: 1, marketplace_codigo: "shopee", marketplace_nome: "Shopee", tipo: "campanha", origem: "automatica", titulo: "Semana do Frete Grátis",
+      codigo: null, desconto_tipo: null, desconto_valor: null, link_afiliado: "https://s.shopee.com.br/F1", fim_em: new Date(Date.now() + 86400000).toISOString(),
+      status: "ativo", demo: false, produtos_aprovados: 0, sugestoes: 0, publicacoes: 0, ultima_publicacao: null },
+  ],
+  cupons_produtos: [
+    { cupom_id: 41, promocao_id: 12, origem: "manual", aprovado: true, motivo: null },
+    { cupom_id: 41, promocao_id: 11, origem: "sugestao", aprovado: false, motivo: "título contém: fone" },
+  ],
 };
 const CONTAGENS = { promocoes: 3 };
 

@@ -4,11 +4,11 @@ Busca ofertas, valida o link de afiliado, publica no Telegram e no Instagram, ac
 
 ```
 .github/workflows/   bot (10 em 10 min), testes, painel (GitHub Pages), manutenção, token do Instagram
-backend/             worker em Python: serviços, motor de inteligência e integrações independentes (164 testes)
+backend/             worker em Python: serviços, motor de inteligência e integrações independentes (187 testes)
 frontend/painel/     painel em módulos JavaScript (login, resumo, ofertas, nova, comissões, logs, ajustes)
-frontend/testes/     teste automatizado do painel com dados simulados (33 verificações)
-supabase/            migrations SQL, testes de integridade (97 + 10 da auditoria), Edge Functions r e disparar
-docs/                ARQUITETURA · BANCO_DE_DADOS · MOTOR_INTELIGENCIA · SEGURANCA · AUDITORIA · IMPLANTACAO · CHECKLIST_PRODUCAO
+frontend/testes/     teste automatizado do painel com dados simulados (42 verificações)
+supabase/            migrations SQL, testes de integridade (118), Edge Functions r e disparar
+docs/                ARQUITETURA · BANCO_DE_DADOS · MOTOR_INTELIGENCIA · CUPONS · SEGURANCA · AUDITORIA · IMPLANTACAO · CHECKLIST_PRODUCAO
 .env.example         modelo de variáveis (sem valores reais)
 ```
 
@@ -16,7 +16,7 @@ docs/                ARQUITETURA · BANCO_DE_DADOS · MOTOR_INTELIGENCIA · SEGU
 
 | Camada | Testes |
 |---|---|
-| Banco (PostgreSQL/Supabase) | `select * from testes.resumo();` → 107 de 107 (após a migration 015) |
-| Backend (Python) | `cd backend && python -m pytest -q` → 164 de 164 |
-| Painel | `python frontend/testes/testar_painel.py` → 33 de 33 |
+| Banco (PostgreSQL/Supabase) | `select * from testes.resumo();` → 118 de 118 |
+| Backend (Python) | `cd backend && python -m pytest -q` → 187 de 187 |
+| Painel | `python frontend/testes/testar_painel.py` → 42 de 42 |
 | Simulação completa (sem banco e sem internet) | `cd backend && python -m app.main simular` |

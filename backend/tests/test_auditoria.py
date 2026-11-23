@@ -76,6 +76,7 @@ class Hospedagem(HospedagemImagem):
 def cenario(canais_reais: dict, relogio=TARDE):
     """Loja real + canais reais: busca, valida, analisa e enfileira. Devolve (repo, pub, loja, cfg)."""
     repo, loja = MemoriaRepositorio(), LojaReal()
+    repo.relogio = lambda: relogio          # relógio fixo: o teste não depende do dia em que roda
     repo.definir_modo("marketplaces", "shopee", "real")
     for codigo in ("telegram", "instagram_story", "instagram_feed"):
         repo.definir_modo("canais", codigo, "real" if codigo in canais_reais else "demo")
@@ -194,6 +195,7 @@ def test_oferta_duplicada_nao_gera_segunda_promocao_nem_segunda_publicacao():
     pub.processar_fila(cfg)
     assert sum("sendPhoto" in c["url"] for c in sessao.chamadas) == 2   # 1 post por oferta
     repo.t["promocoes"][0]["status"] = "aprovada"                     # mesmo que alguém reaprove
+    repo.relogio = pub.relogio = lambda: TARDE + timedelta(hours=1)    # depois do intervalo entre rodadas
     assert pub.enfileirar(cfg) == 1                                   # só o story (demo); o Telegram respeita a janela de 24 h
     tg = next(c for c in repo.t["canais"] if c["codigo"] == "telegram")
     assert not any(f["canal_id"] == tg["id"] and f["status"] == "pendente" for f in repo.t["fila"])
@@ -417,7 +419,7 @@ def test_logs_sao_gravados_a_cada_etapa():
 def test_reinicio_fecha_rodada_interrompida_e_retoma_a_fila():
     repo, pub, loja, cfg = cenario({})
     orfa = repo.iniciar_execucao("agendada", "real", "2.0")
-    repo._um("execucoes", id=orfa)["iniciada_em"] = datetime.now(timezone.utc) - timedelta(hours=2)
+    repo._um("execucoes", id=orfa)["iniciada_em"] = TARDE - timedelta(hours=2)
     # processo novo: objetos novos, mesmo banco
     novo = ServicoPublicacao(repo, pub.canais, novo_log(), url_supabase="https://abc.supabase.co", relogio=lambda: TARDE)
     status, resumo = Orquestrador(repo, Integracoes(fontes={"shopee": loja}, canais=pub.canais), novo_log(),

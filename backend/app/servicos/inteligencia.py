@@ -83,16 +83,26 @@ class ServicoInteligencia:
         for t in self.repo.titulos_ativos(agora - timedelta(days=30)):
             indice.setdefault(normalizar_titulo(t["titulo"]), []).append(t)
         verificar_imagem = bool(ajuste(cfg, "inteligencia.verificar_imagem"))
+        from .cupons import melhor_cupom  # (import aqui evita ciclo entre os módulos)
 
         for it in itens:
             try:
                 largura, altura = self.medir_imagem(it.get("imagem_url")) if verificar_imagem else (None, None)
                 situacao, motivo_link = situacao_do_link(it.get("link"))
                 confiaveis = it.get("marketplace_modo") == "real" and it.get("origem") == "automatica" and not it.get("demo")
+                origem_loja = "manual" if it.get("origem") == "manual" else "loja"
+                preco, preco_produto = it["preco"], it.get("preco_produto")
+                referencia = it.get("preco_referencia")
+                origem_ref = origem_loja if referencia else None
+                cupom = self._cupom(it, melhor_cupom)
+                if cupom:
+                    # com cupom: o preço final é o da loja menos o desconto do cupom (regras do próprio cupom)
+                    if not referencia:
+                        referencia, origem_ref = preco, origem_loja
+                    preco, preco_produto = cupom[1], None
                 entrada = EntradaAnalise(
-                    titulo=it["titulo"], preco=it["preco"], preco_produto=it.get("preco_produto"),
-                    preco_referencia=it.get("preco_referencia"),
-                    origem_referencia=("manual" if it.get("origem") == "manual" else "loja") if it.get("preco_referencia") else None,
+                    titulo=it["titulo"], preco=preco, preco_produto=preco_produto,
+                    preco_referencia=referencia, origem_referencia=origem_ref,
                     historico=[PontoPreco(h["preco"], _data(h["quando"]), h.get("disponivel", True))
                                for h in historicos.get(it["produto_id"], [])],
                     disponivel=bool(it.get("disponivel")),
@@ -102,6 +112,9 @@ class ServicoInteligencia:
                     link_situacao=situacao, link_motivo=motivo_link,
                     duplicada=self._duplicada(it, indice), demo=bool(it.get("demo")))
                 r = analisar(entrada, regras, agora)
+                if cupom:
+                    r.motivos.append(f"Preço com o cupom {cupom[0].codigo}: R$ {cupom[1]:.2f}".replace(".", ",")
+                                     + " (o comprador digita o código no pagamento)")
                 self.repo.salvar_analise(it["promocao_id"], r.pontuacao, r.classificacao, r.confianca, r.como_dict())
                 contagem["analisadas"] += 1
                 contagem[r.classificacao] += 1
@@ -110,6 +123,12 @@ class ServicoInteligencia:
             except (ErroBanco, ValueError) as e:
                 self.log.erro("inteligencia", "Falha ao analisar oferta", promocao_id=it.get("promocao_id"), erro=str(e))
         return contagem
+
+    def _cupom(self, it: dict, melhor_cupom):
+        try:
+            return melhor_cupom(self.repo.cupons_da_promocao(it["promocao_id"]), float(it["preco"]))
+        except ErroBanco:
+            return None
 
     @staticmethod
     def _duplicada(it: dict, indice: dict[str, list[dict]]) -> str | None:

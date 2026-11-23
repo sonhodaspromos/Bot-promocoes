@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from ..modelos import ConteudoPublicacao, OfertaEncontrada
+from ..modelos import CampanhaEncontrada, ConteudoPublicacao, OfertaEncontrada
 
 REAL, DEMO, MANUAL = "real", "demo", "manual"
 
@@ -22,6 +22,7 @@ class FonteOfertas(ABC):
     suporta_busca: bool = True
     suporta_consulta: bool = False   # sabe consultar preço/disponibilidade de um item
     suporta_comissoes: bool = False  # sabe importar relatório de comissões
+    suporta_campanhas: bool = False  # sabe listar campanhas/cupons oficiais da loja
 
     @abstractmethod
     def buscar(self, palavra: str, limite: int = 30) -> list[OfertaEncontrada]:
@@ -38,6 +39,10 @@ class FonteOfertas(ABC):
     def comissoes(self, inicio: datetime, fim: datetime) -> list[dict]:
         """Itens de comissão: referencia_externa, valor_comissao, valor_venda, data_venda, status, id_externo."""
         raise NotImplementedError
+
+    def campanhas(self, limite: int = 20) -> list[CampanhaEncontrada]:
+        """Campanhas oficiais vigentes (com link de afiliado). Só se suporta_campanhas."""
+        return []
 
     def testar(self) -> str:
         """Teste rápido da integração (usado no comando testar-integracoes)."""

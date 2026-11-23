@@ -12,6 +12,8 @@ PADROES = {
     "monitor.acompanhar_dias": 7, "monitor.verificar_links": True, "busca.palavras_por_execucao": 3,
     "busca.ofertas_por_palavra": 30, "sistema.fuso_horario": "America/Recife",
     "inteligencia.janela_repeticao_horas": 24, "inteligencia.verificar_imagem": True,
+    "cupons.ativo": True, "cupons.max_stories_dia": 3, "cupons.publicar_telegram": True, "cupons.horario": 9,
+    "cupons.buscar_campanhas": True, "cupons.sugerir_produtos": True, "cupons.max_sugestoes": 10,
 }
 
 

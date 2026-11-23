@@ -10,7 +10,9 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 
-from ...modelos import OfertaEncontrada
+from datetime import datetime, timedelta, timezone
+
+from ...modelos import CampanhaEncontrada, OfertaEncontrada
 from ..base import DEMO, FonteOfertas
 
 
@@ -18,6 +20,7 @@ class DemoFonte(FonteOfertas):
     codigo = "demo"
     modo = DEMO
     suporta_consulta = True
+    suporta_campanhas = True
 
     def __init__(self, ofertas_por_busca: int = 4):
         self.ofertas_por_busca = ofertas_por_busca
@@ -43,6 +46,11 @@ class DemoFonte(FonteOfertas):
     def consultar(self, id_externo):
         oferta = self.catalogo.get(id_externo)
         return replace(oferta) if oferta and oferta.disponivel else None
+
+    def campanhas(self, limite=20):
+        fim = datetime.now(timezone.utc) + timedelta(days=2)
+        return [CampanhaEncontrada(marketplace=self.codigo, id_externo="camp-demo-1", titulo="[DEMO] Semana do Frete Grátis",
+                                   link_afiliado="https://demo.invalid/campanha/frete", fim_em=fim, demo=True)][:limite]
 
     # usado em testes e na simulação para imitar mudanças na loja
     def simular_preco(self, id_externo: str, preco: float) -> None:

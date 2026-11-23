@@ -37,10 +37,12 @@ class TelegramCanal(CanalPublicacao):
         return dados["result"]
 
     def publicar(self, conteudo: ConteudoPublicacao) -> str:
-        if not conteudo.link_rastreado.startswith("https://"):
-            raise ErroIntegracao("Link inválido para publicação", servico="telegram")
-        dados = {"chat_id": self.chat, "caption": conteudo.legenda[:1024], "parse_mode": "HTML",
-                 "reply_markup": json.dumps({"inline_keyboard": [[{"text": "🛒 Comprar agora", "url": conteudo.link_rastreado}]]})}
+        dados = {"chat_id": self.chat, "caption": conteudo.legenda[:1024], "parse_mode": "HTML"}
+        if conteudo.link_rastreado:  # cupom sem link só mostra o código; oferta sempre tem link (checado antes)
+            if not conteudo.link_rastreado.startswith("https://"):
+                raise ErroIntegracao("Link inválido para publicação", servico="telegram")
+            texto_botao = "🎟 Pegar cupom" if getattr(conteudo, "promocao_id", 1) == 0 else "🛒 Comprar agora"
+            dados["reply_markup"] = json.dumps({"inline_keyboard": [[{"text": texto_botao, "url": conteudo.link_rastreado}]]})
         if conteudo.imagem:
             r = self._chamar("sendPhoto", repetir=False, data=dados, files={"photo": ("oferta.jpg", conteudo.imagem, "image/jpeg")})
         else:

@@ -17,23 +17,17 @@ GitHub Actions (a cada 10 min) ──► backend Python ──► Supabase (banc
 GitHub Pages ──► painel (login Supabase, RLS)
 ```
 
-## 1. Banco de dados (Supabase, projeto bot-promocoes)
+## 1. Banco de dados (Supabase, projeto bot-promocoes) ✅ pronto
 
-O banco já existe, com as migrations 000 a 014 aplicadas. Falta aplicar 2 arquivos.
+Em 23/11/2026, todas as 18 migrations foram aplicadas (inclusive a manutenção diária, as correções da auditoria e os cupons). Os dados de teste e a extensão `pg_net` foram removidos.
 
-1. Supabase → **SQL Editor** → **New query**.
-2. Cole e rode (**Run**), nesta ordem:
-   1. `supabase/migrations/20261122140850_manutencao_diaria.sql`
-   2. `supabase/migrations/20261122141500_auditoria_correcoes.sql`
-3. Rode os testes: cole o arquivo `supabase/tests/09_auditoria.sql` → Run. Depois rode:
-   ```sql
-   select * from testes.resumo();                               -- esperado: 107 / 107 / 0
-   select * from testes.rodar('auditoria') where not ok;        -- esperado: nenhuma linha
-   ```
-4. *(recomendado)* Rode `supabase/manutencao/limpar_teste_e2e.sql`. Ele apaga os dados do teste de cliques e a extensão `pg_net`.
-5. Confira a manutenção: `select public.manutencao_diaria();` deve devolver um JSON com as contagens.
+Para conferir quando quiser (Supabase → **SQL Editor**):
+```sql
+select * from testes.resumo();          -- esperado: 118 / 118 / 0
+select public.manutencao_diaria();      -- devolve as contagens da limpeza
+```
 
-**Deu certo se:** `testes.resumo()` mostra 0 reprovados.
+Para um projeto **novo** (ex.: restaurar em outro lugar), aplique os arquivos de `supabase/migrations/` na ordem dos nomes e depois os de `supabase/tests/` (00 a 10).
 
 ## 2. Repositório no GitHub
 

@@ -4,7 +4,7 @@ import { $, $$, aviso, dataHora, esc } from "../ui.js";
 
 const GRUPOS = {
   publicacao: "Publicação e agendamento", filtros: "Filtros de ofertas", monitor: "Monitor de preço e links",
-  transparencia: "Transparência", textos: "Textos", visual: "Visual das artes", sistema: "Sistema", logs: "Logs", busca: "Busca", inteligencia: "Motor de inteligência (pontuação 0–100)",
+  transparencia: "Transparência", textos: "Textos", visual: "Visual das artes", sistema: "Sistema", logs: "Logs", busca: "Busca", inteligencia: "Motor de inteligência (pontuação 0–100)", cupons: "Cupons e campanhas",
 };
 const CREDENCIAIS = [
   ["shopee", "APP_ID", "Shopee · App ID"], ["shopee", "SECRET", "Shopee · Secret"],

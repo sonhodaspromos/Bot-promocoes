@@ -17,7 +17,9 @@ const MENSAGENS = {
   P0017: "Só o sistema marca uma oferta como publicada.",
   P0018: "Esta oferta já foi publicada neste canal nas últimas horas (regra de não repetir).",
   P0019: "O motor de inteligência não recomendou esta oferta, então ela não pode ir para a fila.",
-  P0023: "A pontuação e a classificação são calculadas pelo motor de inteligência.",
+  P0023: "Esse dado é calculado pelo sistema e não pode ser alterado pelo painel.",
+  P0025: "Esse cupom está vencido ou pausado.",
+  P0026: "O cupom é de outra loja: só vale para produtos da mesma loja.",
   PGRST301: "Sua sessão expirou. Entre de novo.",
 };
 

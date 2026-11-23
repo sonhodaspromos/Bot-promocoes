@@ -103,3 +103,9 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 /* alertas da auditoria */
 .alerta { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; font-size: 14px; line-height: 1.35; }
 .alerta.erro { background: #FBE3E0; color: var(--erro); } .alerta.aviso { background: #FFF3D6; color: #7a5200; }
+
+/* cupons */
+.cupom .codigo { display: inline-block; margin: 6px 0; padding: 6px 14px; border: 2px dashed var(--tx); border-radius: 10px;
+  background: #FFF7D6; font: 800 20px ui-monospace, monospace; letter-spacing: 1px; }
+.cupom .t { font-weight: 650; font-size: 15px; } .cupom .m { color: var(--mu); font-size: 12.5px; margin-top: 3px; }
+.produtos-cupom h3 { font-size: 14px; margin: 14px 0 4px; }

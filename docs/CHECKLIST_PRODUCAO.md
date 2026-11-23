@@ -5,8 +5,8 @@ Marque cada item. **Só ligue as publicações reais quando todos os itens 🔴 
 ## 🔴 Bloqueantes (sem isso, não ligar)
 
 - [x] Migration `20261122140850_manutencao_diaria.sql` aplicada (`select public.manutencao_diaria();` responde)
-- [x] Migration `20261122141500_auditoria_correcoes.sql` aplicada
-- [x] `supabase/tests/09_auditoria.sql` carregado e `select * from testes.resumo();` → **107 / 107 / 0**
+- [x] Migrations `20261122141500_auditoria_correcoes.sql` e `20261123120000_cupons_campanhas.sql` aplicadas
+- [x] Testes do banco carregados (00 a 10) e `select * from testes.resumo();` → **118 / 118 / 0**
 - [ ] `python -m app.main testar-integracoes` → `REAL ✔` em **cada** integração que será usada
 - [ ] Formato do link de afiliado (`padrao_afiliado`) conferido com um link real de cada loja
 - [ ] Bot do Telegram é **admin** do canal, com permissão de publicar **e editar**
@@ -34,6 +34,7 @@ Marque cada item. **Só ligue as publicações reais quando todos os itens 🔴 
 - [ ] E-mail de notificação do GitHub ativo (Settings → Notifications → Actions → "Send notifications for failed workflows only")
 - [ ] Limites diários conferidos (Supabase → Table Editor → `canais`): Telegram ≤ 200, Stories ≤ 45, Feed = 1 (cota do Instagram: 50 em 24 h)
 - [ ] Horário de publicação e intervalo mínimo conferidos (Ajustes → Publicação)
+- [ ] Cupons conferidos (Ajustes → Cupons e campanhas): horário, máximo de stories por dia, Telegram
 
 ## 🟢 Primeiros dias
 

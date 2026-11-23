@@ -3,8 +3,8 @@
 **Onde está:** PostgreSQL 17 no Supabase, projeto **bot-promocoes** (`tafmitwmtjbdopchycac`, São Paulo).
 
 **Situação em 22/11/2026:**
-- 17 de 17 migrations aplicadas (008b e 015 aplicadas em 23/11/2026).
-- **107 de 107** testes de integridade aprovados (inclui os 10 da auditoria).
+- 18 de 18 migrations aplicadas (008b, 015 e 016 em 23/11/2026).
+- **118 de 118** testes de integridade aprovados (inclui os 10 da auditoria e os 11 de cupons).
 - Dados do teste de cliques e extensão `pg_net` removidos em 23/11/2026. de integridade aprovados.
 - Teste de volume com 10 mil produtos aprovado.
 - A estrutura antiga (v1, que estava vazia) foi removida.
@@ -113,9 +113,9 @@ Inserção em massa: cerca de 10 mil linhas a cada 2 a 4 s, com todos os gatilho
 ## 7. Como aplicar e testar
 
 - **Migrations** (`supabase/migrations/`): aplique na ordem dos nomes. Já estão aplicadas no projeto, exceto a da seção 8. Compatíveis com `supabase db push`.
-- **Testes** (`supabase/tests/`): rode os arquivos `00` a `09` no SQL Editor e depois:
+- **Testes** (`supabase/tests/`): rode os arquivos `00` a `10` no SQL Editor e depois:
   ```sql
-  select * from testes.resumo();        -- 107 / 107 / 0 (com a migration 015)
+  select * from testes.resumo();        -- 118 / 118 / 0
   select * from testes.rodar();         -- detalhe de cada teste
   select * from testes.carga(10000);    -- teste de volume (desfaz tudo no final)
   ```
@@ -140,6 +140,8 @@ Inserção em massa: cerca de 10 mil linhas a cada 2 a 4 s, com todos os gatilho
 | P0020 / P0021 / P0022 | Cadastro manual: loja desativada / link sem https / produto já tem oferta ativa |
 | P0023 | Painel tentou alterar pontuação ou classificação |
 | P0024 | Link no domínio da loja, mas sem o formato de link de afiliado (`marketplaces.padrao_afiliado`) |
+| P0025 | Cupom vencido ou pausado não pode ser publicado |
+| P0026 | Produto de outra loja não pode entrar no cupom |
 
 ## 7b. Motor de inteligência (migrations 013 e 014)
 
@@ -157,6 +159,15 @@ Inserção em massa: cerca de 10 mil linhas a cada 2 a 4 s, com todos os gatilho
 - A análise do motor também é apagada em oferta **publicada** quando preço, estoque ou link mudam.
 - Limite diário dos stories reduzido para 45 (cota da API do Instagram: 50 em 24 h, contando o feed).
 - Detalhes e testes em `docs/AUDITORIA.md`.
+
+## 7d. Cupons e campanhas (migration 016)
+
+- `cupons`: cupom (código) ou campanha (link de afiliado), com desconto, mínimo, teto, validade, palavras para sugestão e status (ativo, pausado, expirado). Campanhas da Shopee entram sozinhas (`origem = automatica`).
+- `cupons_produtos`: produtos em que o cupom vale. Os que você adiciona entram aprovados; as sugestões do bot aguardam aprovação.
+- `cupons_publicacoes`: 1 publicação com sucesso por cupom, canal e dia (índice único). Imutável.
+- `vw_cupons_painel`: cupons com contagens para o painel (respeita o RLS).
+- A manutenção diária também marca cupons vencidos.
+- Detalhes em `docs/CUPONS.md`.
 
 ## 8. Pendências
 

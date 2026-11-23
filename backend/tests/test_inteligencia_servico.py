@@ -214,5 +214,5 @@ def test_rodada_completa_demo_com_motor():
     status, resumo = Orquestrador(r, integ, log(), url_supabase="https://abc.supabase.co").executar()
     assert status == "sucesso" and resumo.analisadas == resumo.novas_promocoes > 0
     assert resumo.excelentes + resumo.boas + resumo.nao_recomendadas == resumo.analisadas
-    publicadas = {c.promocao_id for c in integ.canais["telegram"].publicados}
+    publicadas = {c.promocao_id for c in integ.canais["telegram"].publicados if c.promocao_id}  # 0 = post de cupom
     assert all(promo(r, i)["classificacao"] in ("excelente", "boa") for i in publicadas)

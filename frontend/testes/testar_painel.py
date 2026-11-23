@@ -53,6 +53,10 @@ async def main():
 
         # ---------------------------------------------------------- dono
         print("Dono:")
+        import re as _re
+        def _nav(caminho):
+            return _re.search(r"<nav.*?</nav>", (RAIZ / caminho).read_text(encoding="utf-8"), _re.S).group(0)
+        checar(_nav("painel/index.html") == _nav("testes/painel.html"), "página de teste tem o mesmo menu do painel real")
         pg, erros = await pagina("papel=dono")
         checar(await pg.is_visible("#faixa-demo"), "faixa de MODO DEMONSTRAÇÃO aparece")
         checar("DEMONSTRAÇÃO" in await pg.inner_text("#faixa-demo"), "faixa explica o modo demo")
@@ -61,10 +65,34 @@ async def main():
         alerta = await pg.inner_text("#alertas")
         checar("telegram" in alerta and "credencial recusada" in alerta, "resumo alerta canal com credencial recusada")
         await pg.screenshot(path=CAPTURAS / "1_resumo.png", full_page=True)
-        for tela in ["ofertas", "nova", "comissoes", "logs", "ajustes"]:
+        for tela in ["ofertas", "nova", "cupons", "comissoes", "logs", "ajustes"]:
             await pg.click(f'nav button[data-tela="{tela}"]')
             await pg.wait_for_timeout(400)
             await pg.screenshot(path=CAPTURAS / f"dono_{tela}.png", full_page=True)
+        # ---- cupons
+        await pg.click('nav button[data-tela="cupons"]'); await pg.wait_for_timeout(400)
+        lista = await pg.inner_text("#c-lista")
+        checar("ACHADO15" in lista and "15% OFF" in lista and "acima de R$" in lista, "cupons: mostra código, desconto e mínimo")
+        checar("campanha oficial (automática)" in lista and "Remover" not in await pg.inner_text("#cupom-42"),
+               "cupons: campanha automática aparece e não pode ser removida pelo painel")
+        checar(await pg.locator("#c-lista b", has_text="selecionados").count() == 0, "cupons: regras com HTML aparecem como texto")
+        await pg.click('#cupom-41 [data-acao="produtos"]'); await pg.wait_for_timeout(400)
+        prod = await pg.inner_text("#prod-41")
+        checar("vale o cupom" in prod and "sugestão do bot" in prod, "cupons: separa produto confirmado de sugestão")
+        await pg.click('#prod-41 [data-acao="aprovar"]'); await pg.wait_for_timeout(300)
+        chamadas = await pg.evaluate("window.__chamadas")
+        checar(any(c.get("tabela") == "cupons_produtos" and c.get("operacao") == "update" and (c.get("corpo") or {}).get("aprovado") is True
+                   for c in chamadas), "cupons: aprovar sugestão")
+        await pg.click("#c-novo"); await pg.wait_for_timeout(400)
+        await pg.fill("#cp-codigo", "fim de semana15"); await pg.fill("#cp-titulo", "Cupom teste")
+        await pg.fill("#cp-valor", "95"); await pg.click("#cp-salvar"); await pg.wait_for_timeout(300)
+        checar("90%" in await pg.inner_text("#toast"), "cupons: recusa desconto acima de 90%")
+        await pg.fill("#cp-valor", "15"); await pg.fill("#cp-minimo", "79,90"); await pg.click("#cp-salvar"); await pg.wait_for_timeout(400)
+        chamadas = await pg.evaluate("window.__chamadas")
+        novo = [c for c in chamadas if c.get("tabela") == "cupons" and c.get("operacao") == "insert"]
+        checar(novo and novo[-1]["corpo"]["codigo"] == "FIMDESEMANA15" and novo[-1]["corpo"]["valor_minimo"] == 79.9,
+               "cupons: salva código em maiúsculas e valor mínimo")
+        await pg.screenshot(path=CAPTURAS / "dono_cupons.png", full_page=True)
         await pg.click('nav button[data-tela="ofertas"]'); await pg.wait_for_timeout(300)
         checar(await pg.locator("script", has_text="alert(1)").count() == 0 and "<script>" in await pg.inner_text("#lista"),
                "título com HTML aparece como texto (sem injeção)")
@@ -122,6 +150,9 @@ async def main():
         checar(not await pg.is_visible("#btn-publicar"), "leitor não vê Publicar agora")
         await pg.click('nav button[data-tela="ofertas"]'); await pg.wait_for_timeout(300)
         checar(await pg.locator("[data-acao]").count() == 0, "leitor não vê botões de ação nas ofertas")
+        await pg.click('nav button[data-tela="cupons"]'); await pg.wait_for_timeout(300)
+        checar(await pg.locator("#c-novo").count() == 0 and await pg.locator("#c-lista [data-acao]").count() == 0,
+               "leitor vê cupons, mas não cadastra nem altera")
         await pg.click('nav button[data-tela="ajustes"]'); await pg.wait_for_timeout(300)
         checar(await pg.locator("text=Credenciais (cifradas no cofre)").count() == 0, "leitor não vê credenciais")
         checar(await pg.locator('#form-cfg input:not([disabled])').count() == 0, "ajustes ficam somente leitura")

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from .erros import RegraViolada
-from .modelos import ItemFila, OfertaEncontrada, ResultadoValidacao
+from .modelos import CampanhaEncontrada, Cupom, ItemFila, OfertaEncontrada, ResultadoValidacao
 from .repositorio import Repositorio, agora
 
 CONFIG_PADRAO = {
@@ -27,6 +27,8 @@ CONFIG_PADRAO = {
     "textos.rodape_story": "Link no canal do Telegram", "textos.hashtags": "#achadinhos #promoção",
     "visual.nome_perfil": "Sonho das Promos", "visual.cor_principal": "#EE4D2D", "visual.cor_destaque": "#FFD400",
     "sistema.fuso_horario": "America/Recife", "logs.retencao_dias": 30,
+    "cupons.ativo": True, "cupons.max_stories_dia": 3, "cupons.publicar_telegram": True, "cupons.horario": 9,
+    "cupons.buscar_campanhas": True, "cupons.sugerir_produtos": True, "cupons.max_sugestoes": 10,
 }
 
 
@@ -40,7 +42,7 @@ class MemoriaRepositorio(Repositorio):
         self._ids = itertools.count(1)
         self.config = dict(CONFIG_PADRAO)
         self.t = {k: [] for k in ("marketplaces", "canais", "categorias", "produtos", "promocoes", "links",
-                                  "fila", "historico", "comissoes", "execucoes", "logs", "precos")}
+                                  "fila", "historico", "comissoes", "execucoes", "logs", "precos", "cupons", "cupons_produtos", "cupons_pub")}
         self.cofre: dict[tuple[str, str], str] = {}
         self.relogio = agora  # os testes trocam para simular a passagem do tempo
         for codigo, nome, doms, modo, padrao in [
@@ -87,7 +89,7 @@ class MemoriaRepositorio(Repositorio):
         p = {"id": self._id(), "marketplace_id": marketplace_id, "id_externo": oferta.id_externo,
              "categoria_id": categoria_id, "titulo": oferta.titulo, "preco_atual": oferta.preco,
              "preco_original": oferta.preco_original, "imagem_url": oferta.imagem_url, "disponivel": oferta.disponivel,
-             "demo": oferta.demo or mkt["modo"] == "demo", "verificado_em": agora(),
+             "demo": oferta.demo or mkt["modo"] == "demo", "verificado_em": self.relogio(),
              "nota": oferta.nota, "total_vendas": oferta.total_vendas}
         self.t["produtos"].append(p)
         self._registrar_preco(p)
@@ -95,7 +97,7 @@ class MemoriaRepositorio(Repositorio):
 
     def _registrar_preco(self, p):
         self.t["precos"].append({"produto_id": p["id"], "preco": p["preco_atual"], "disponivel": p["disponivel"],
-                                 "quando": agora()})
+                                 "quando": self.relogio()})
 
     def _invalidar_analise(self, produto_id):
         for pr in self.t["promocoes"]:
@@ -110,7 +112,7 @@ class MemoriaRepositorio(Repositorio):
         pr = {"id": self._id(), "produto_id": produto_id, "preco_promocional": oferta.preco,
               "preco_referencia": oferta.preco_original, "desconto_pct": oferta.desconto_pct, "status": status,
               "origem": origem, "demo": prod["demo"] or origem == "demo", "motivo_status": None,
-              "publicada_em": None, "pausada_em": None, "criado_em": agora(), "comissao_pct": oferta.comissao_pct,
+              "publicada_em": None, "pausada_em": None, "criado_em": self.relogio(), "comissao_pct": oferta.comissao_pct,
               "pontuacao": None, "classificacao": None, "confianca": None, "analise": None, "analisada_em": None}
         self.t["promocoes"].append(pr)
         return pr["id"]
@@ -260,9 +262,9 @@ class MemoriaRepositorio(Repositorio):
         self.t["historico"].append({"id": self._id(), "fila_id": item.id, "promocao_id": item.promocao_id,
                                     "canal_id": item.canal_id, "resultado": "sucesso" if sucesso else "erro",
                                     "id_mensagem_externa": id_mensagem, "erro": erro, "demo": demo,
-                                    "publicado_em": agora()})
+                                    "publicado_em": self.relogio()})
         if sucesso and (not demo or pr["demo"]) and pr["status"] != "publicada":
-            pr.update(status="publicada", publicada_em=agora())
+            pr.update(status="publicada", publicada_em=self.relogio())
         f = self._um("fila", id=item.id)
         if f:
             f["status"] = "concluida" if sucesso else ("falhou" if f["tentativas"] >= f["max_tentativas"] else "pendente")
@@ -319,10 +321,10 @@ class MemoriaRepositorio(Repositorio):
 
     def salvar_analise(self, promocao_id, pontuacao, classificacao, confianca, analise):
         self._um("promocoes", id=promocao_id).update(pontuacao=pontuacao, classificacao=classificacao,
-                                                    confianca=confianca, analise=analise, analisada_em=agora())
+                                                    confianca=confianca, analise=analise, analisada_em=self.relogio())
 
     def publicado_no_canal_recentemente(self, produto_id, canal_id, horas):
-        limite = agora() - timedelta(hours=horas)
+        limite = self.relogio() - timedelta(hours=horas)
         promos = {p["id"] for p in self.t["promocoes"] if p["produto_id"] == produto_id}
         return any(h["promocao_id"] in promos and h["canal_id"] == canal_id and h["resultado"] == "sucesso"
                    and not h["demo"] and h["publicado_em"] >= limite for h in self.t["historico"])
@@ -346,7 +348,7 @@ class MemoriaRepositorio(Repositorio):
         p = self._um("produtos", id=produto_id)
         antes_preco, antes_disp = p["preco_atual"], p["disponivel"]
         antes_original = p.get("preco_original")
-        p.update(preco_atual=preco, disponivel=disponivel, verificado_em=agora())
+        p.update(preco_atual=preco, disponivel=disponivel, verificado_em=self.relogio())
         if preco_original:
             p["preco_original"] = preco_original
         if preco != antes_preco or disponivel != antes_disp or p.get("preco_original") != antes_original:
@@ -364,7 +366,7 @@ class MemoriaRepositorio(Repositorio):
                 self._pausar(pr, f"Preço subiu para R$ {preco:.2f}")
 
     def _pausar(self, pr, motivo):
-        pr.update(status="pausada", motivo_status=motivo, pausada_em=agora())
+        pr.update(status="pausada", motivo_status=motivo, pausada_em=self.relogio())
         for f in self.t["fila"]:
             if f["promocao_id"] == pr["id"] and f["status"] in ("pendente", "processando"):
                 f["status"] = "cancelada"
@@ -399,19 +401,130 @@ class MemoriaRepositorio(Repositorio):
 
     def iniciar_execucao(self, origem, modo, versao):
         e = {"id": str(uuid.uuid4()), "origem": origem, "modo": modo, "versao": versao, "status": "rodando",
-             "iniciada_em": agora(), "resumo": {}}
+             "iniciada_em": self.relogio(), "resumo": {}}
         self.t["execucoes"].append(e)
         return e["id"]
 
     def finalizar_execucao(self, execucao_id, status, resumo):
         e = self._um("execucoes", id=execucao_id)
-        e.update(status=status, resumo=resumo, finalizada_em=agora())
+        e.update(status=status, resumo=resumo, finalizada_em=self.relogio())
+
+    # ---- cupons (espelha a migration 016)
+    def criar_cupom(self, marketplace: str, titulo: str, fim_em, **campos) -> int:
+        """Como o cadastro do painel. Aplica as mesmas regras do banco."""
+        mkt = self._um("marketplaces", codigo=marketplace)
+        c = {"id": self._id(), "marketplace_id": mkt["id"], "tipo": "cupom", "origem": "manual", "id_externo": None,
+             "titulo": titulo.strip(), "codigo": None, "desconto_tipo": None, "desconto_valor": None, "valor_minimo": None,
+             "desconto_maximo": None, "link_afiliado": None, "imagem_url": None, "palavras_chave": [], "categoria_id": None,
+             "regras": None, "inicio_em": self.relogio() - timedelta(minutes=1), "fim_em": fim_em, "status": "ativo",
+             "demo": mkt["modo"] == "demo", "atualizado_em": self.relogio()}
+        c.update(campos)
+        c["codigo"] = (c["codigo"] or "").strip().upper() or None
+        self._regras_cupom(c, mkt)
+        self.t["cupons"].append(c)
+        return c["id"]
+
+    def _regras_cupom(self, c, mkt):
+        if c["tipo"] == "cupom" and not c["codigo"]:
+            raise RegraViolada("cupom precisa de código", codigo="23514")
+        if c["tipo"] == "campanha" and not c["link_afiliado"]:
+            raise RegraViolada("campanha precisa de link", codigo="23514")
+        if c["fim_em"] <= c["inicio_em"]:
+            raise RegraViolada("validade invertida", codigo="23514")
+        if c["desconto_tipo"] == "percentual" and (c["desconto_valor"] or 0) > 90:
+            raise RegraViolada("desconto acima de 90%", codigo="23514")
+        if c["link_afiliado"]:
+            if not _dominio_ok(c["link_afiliado"], mkt["dominios_afiliado"]):
+                raise RegraViolada("domínio não é de afiliado", codigo="P0011")
+            if mkt.get("padrao_afiliado") and not re.match(mkt["padrao_afiliado"], c["link_afiliado"]):
+                raise RegraViolada("link sem atribuição de afiliado", codigo="P0024")
+        if c["status"] == "ativo" and c["fim_em"] <= self.relogio():
+            c["status"] = "expirado"
+
+    def _cupom_obj(self, c) -> Cupom:
+        mkt = self._um("marketplaces", id=c["marketplace_id"])
+        return Cupom.de_linha({**c, "marketplace_codigo": mkt["codigo"], "marketplace_nome": mkt["nome"]})
+
+    def _vigente(self, c) -> bool:
+        return c["status"] == "ativo" and c["inicio_em"] <= self.relogio() < c["fim_em"]
+
+    def cupons_vigentes(self):
+        return [self._cupom_obj(c) for c in sorted(self.t["cupons"], key=lambda c: c["fim_em"]) if self._vigente(c)]
+
+    def cupons_publicados_no_dia(self, dia):
+        return [{k: p[k] for k in ("cupom_id", "canal_id", "resultado", "erro")} for p in self.t["cupons_pub"] if p["dia"] == dia]
+
+    def registrar_publicacao_cupom(self, cupom_id, canal_id, sucesso, id_mensagem, erro):
+        c, canal = self._um("cupons", id=cupom_id), self._um("canais", id=canal_id)
+        dia = self.relogio().astimezone(timezone(timedelta(hours=-3))).date().isoformat()
+        if sucesso:
+            if not self._vigente(c):
+                raise RegraViolada("cupom fora da validade ou pausado", codigo="P0025")
+            if c["demo"] and canal["modo"] == "real":
+                raise RegraViolada("cupom demo em canal real", codigo="P0015")
+            if any(p["cupom_id"] == cupom_id and p["canal_id"] == canal_id and p["dia"] == dia and p["resultado"] == "sucesso"
+                   for p in self.t["cupons_pub"]):
+                raise RegraViolada("cupom já publicado hoje neste canal", codigo="23505")
+        self.t["cupons_pub"].append({"id": self._id(), "cupom_id": cupom_id, "canal_id": canal_id, "dia": dia,
+                                     "resultado": "sucesso" if sucesso else "erro", "id_mensagem": id_mensagem,
+                                     "erro": None if sucesso else erro, "demo": c["demo"] or canal["modo"] == "demo"})
+
+    def salvar_campanha(self, cp):
+        mkt = self._um("marketplaces", codigo=cp.marketplace)
+        existente = self._um("cupons", marketplace_id=mkt["id"], id_externo=cp.id_externo)
+        dados = {"tipo": "campanha", "origem": "automatica", "id_externo": cp.id_externo, "titulo": cp.titulo,
+                 "link_afiliado": cp.link_afiliado, "fim_em": cp.fim_em, "imagem_url": cp.imagem_url}
+        if existente:
+            novo = {**existente, **dados, "atualizado_em": self.relogio()}
+            self._regras_cupom(novo, mkt)
+            existente.update(novo)
+        else:
+            self.criar_cupom(cp.marketplace, cp.titulo, cp.fim_em, **{k: v for k, v in dados.items() if k not in ("titulo", "fim_em")},
+                             **({"inicio_em": cp.inicio_em} if cp.inicio_em and cp.inicio_em < cp.fim_em else {}))
+
+    def campanhas_atualizadas_desde(self, desde):
+        return sum(1 for c in self.t["cupons"] if c["origem"] == "automatica" and c["atualizado_em"] >= desde)
+
+    def vincular_produto_cupom(self, cupom_id, promocao_id, origem="manual"):
+        """Como o painel (manual = aprovado na hora)."""
+        c = self._um("cupons", id=cupom_id)
+        pr = self._um("promocoes", id=promocao_id)
+        if self._um("produtos", id=pr["produto_id"])["marketplace_id"] != c["marketplace_id"]:
+            raise RegraViolada("cupom de outra loja", codigo="P0026")
+        if not self._um("cupons_produtos", cupom_id=cupom_id, promocao_id=promocao_id):
+            self.t["cupons_produtos"].append({"cupom_id": cupom_id, "promocao_id": promocao_id, "origem": origem,
+                                              "aprovado": origem == "manual", "motivo": None})
+
+    def candidatos_para_cupom(self, cupom, limite):
+        ja = {l["promocao_id"] for l in self.t["cupons_produtos"] if l["cupom_id"] == cupom.id}
+        saida = []
+        for pr in self.t["promocoes"]:
+            if pr["id"] in ja or pr["status"] not in ("encontrada", "aprovada", "publicada"):
+                continue
+            if pr.get("classificacao") not in ("excelente", "boa") or bool(pr["demo"]) != cupom.demo:
+                continue
+            v = self._view(pr)
+            if v["marketplace"] != cupom.marketplace:
+                continue
+            prod = self._um("produtos", id=pr["produto_id"])
+            saida.append({"id": pr["id"], "titulo": prod["titulo"], "categoria_id": prod.get("categoria_id"),
+                          "preco_promocional": pr["preco_promocional"], "pontuacao": pr.get("pontuacao"), "demo": pr["demo"]})
+        return sorted(saida, key=lambda x: x["pontuacao"] or 0, reverse=True)[: max(limite * 20, 100)]
+
+    def sugerir_produto_cupom(self, cupom_id, promocao_id, motivo):
+        if not self._um("cupons_produtos", cupom_id=cupom_id, promocao_id=promocao_id):
+            self.vincular_produto_cupom(cupom_id, promocao_id, origem="sugestao")
+            self._um("cupons_produtos", cupom_id=cupom_id, promocao_id=promocao_id)["motivo"] = motivo
+
+    def cupons_da_promocao(self, promocao_id):
+        ids = {l["cupom_id"] for l in self.t["cupons_produtos"] if l["promocao_id"] == promocao_id and l["aprovado"]}
+        return [self._cupom_obj(c) for c in self.t["cupons"] if c["id"] in ids and self._vigente(c)]
 
     def encerrar_execucoes_orfas(self, minutos=30):
         n = 0
         for e in self.t["execucoes"]:
-            if e["status"] == "rodando" and e["iniciada_em"] < agora() - timedelta(minutes=max(minutos, 10)):
-                e.update(status="erro", finalizada_em=agora(), resumo={**e["resumo"], "interrompida": True})
+            if e["status"] == "rodando" and e["iniciada_em"] < self.relogio() - timedelta(minutes=max(minutos, 10)):
+                e.update(status="erro", finalizada_em=self.relogio(), resumo={**e["resumo"], "interrompida": True})
                 n += 1
         return n
 

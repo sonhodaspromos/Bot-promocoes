@@ -20,6 +20,7 @@ from .modelos import ResumoExecucao
 from .repositorio import Repositorio
 from .servicos.busca import ServicoBusca
 from .servicos.comissoes import ServicoComissoes
+from .servicos.cupons import ServicoCupons
 from .servicos.inteligencia import ServicoInteligencia
 from .servicos.monitor import ServicoMonitor
 from .servicos.publicacao import ServicoPublicacao
@@ -35,7 +36,8 @@ class Orquestrador:
     def __init__(self, repo: Repositorio, integ: Integracoes, log: Log, *, url_supabase: str,
                  publicacao: ServicoPublicacao | None = None, busca: ServicoBusca | None = None,
                  monitor: ServicoMonitor | None = None, comissoes: ServicoComissoes | None = None,
-                 inteligencia: ServicoInteligencia | None = None, prazo_segundos: float = 360,
+                 inteligencia: ServicoInteligencia | None = None, cupons: ServicoCupons | None = None,
+                 prazo_segundos: float = 360,
                  cronometro=time.monotonic):
         self.repo, self.integ, self.log = repo, integ, log
         self.publicacao = publicacao or ServicoPublicacao(repo, integ.canais, log, url_supabase=url_supabase)
@@ -43,6 +45,7 @@ class Orquestrador:
         self.monitor = monitor or ServicoMonitor(repo, integ.fontes, log)
         self.comissoes = comissoes or ServicoComissoes(repo, integ.fontes, log)
         self.inteligencia = inteligencia or ServicoInteligencia(repo, log)
+        self.cupons = cupons or ServicoCupons(repo, integ.fontes, self.publicacao, log)
         self.prazo, self.cronometro = prazo_segundos, cronometro
 
     def sincronizar_modos(self) -> None:
@@ -116,9 +119,14 @@ class Orquestrador:
         def publicar():
             resumo.publicadas, resumo.falhas_publicacao = self.publicacao.processar_fila(cfg)
 
+        def cupons():
+            r = self.cupons.executar(cfg)
+            resumo.campanhas, resumo.sugestoes_cupom, resumo.cupons_publicados = r["campanhas"], r["sugestoes"], r["cupons_publicados"]
+
         etapas = [("configuração", carregar), ("modos", self.sincronizar_modos), ("monitor", monitorar),
                   ("encerrar pausadas", encerrar), ("comissões", importar), ("busca", buscar),
-                  ("validação de links", validar), ("inteligência", analisar), ("fila", enfileirar), ("publicação", publicar)]
+                  ("validação de links", validar), ("inteligência", analisar), ("fila", enfileirar), ("publicação", publicar),
+                  ("cupons", cupons)]
         for nome, funcao in etapas:
             etapa(nome, funcao)
 
