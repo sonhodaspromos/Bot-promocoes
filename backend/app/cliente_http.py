@@ -52,6 +52,7 @@ class ClienteHTTP:
         kwargs.setdefault("headers", {}).setdefault("User-Agent", NAVEGADOR)
         ultimo: ErroIntegracao | None = None
         for tentativa in range(1, self.tentativas + 1):
+            resp = None
             try:
                 resp = self.sessao.request(metodo, url, **kwargs)
             except requests.ConnectTimeout:
@@ -83,10 +84,19 @@ class ClienteHTTP:
                     ultimo.incerto = True
                     raise ultimo
             if tentativa < self.tentativas:
-                self.dormir(self.espera_inicial * (2 ** (tentativa - 1)))
+                self.dormir(self._espera(tentativa, resp))
         assert ultimo is not None
         self._falhou(servidor)
         raise ultimo
+
+    def _espera(self, tentativa: int, resp) -> float:
+        """Espera crescente; com 429/503 respeita o Retry-After do serviço (em segundos, até 60 s)."""
+        padrao = self.espera_inicial * (2 ** (tentativa - 1))
+        valor = getattr(resp, "headers", {}).get("Retry-After") if resp is not None and getattr(resp, "status_code", 0) in (429, 503) else None
+        try:
+            return min(60.0, max(padrao, float(valor))) if valor else padrao
+        except (TypeError, ValueError):
+            return padrao   # Retry-After em formato de data: usa a espera padrão
 
     def _falhou(self, servidor: str) -> None:
         self.falhas_seguidas[servidor] = self.falhas_seguidas.get(servidor, 0) + 1
@@ -133,7 +143,7 @@ def chamada_de_leitura(metodo: str, url: str, kwargs: dict, permitir_envio_imgbb
         return isinstance(corpo, dict) and corpo.get("method") in ALIEXPRESS_LEITURA
     if caminho.endswith(("/searchItems", "/getItems")):   # Amazon Creators API: consultas
         return True
-    corpo = kwargs.get("data")
+    corpo = kwargs.get("json") if isinstance(kwargs.get("json"), dict) else kwargs.get("data")
     if isinstance(corpo, dict) and corpo.get("grant_type") == "client_credentials":   # token OAuth (não altera nada)
         return True
     if host == "api.imgbb.com":

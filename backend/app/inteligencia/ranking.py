@@ -6,7 +6,9 @@ conta e aparece na explicação):
 
   qualidade               nota do motor (0–100)                                       sempre
   desconto comprovado     desconto real ÷ meta, só se comprovado pelo histórico/cupom  senão 0 (dito)
-  comissão                % oficial ÷ meta (API da loja)                               sem dados se não oficial
+  comissão                % LÍQUIDA ÷ meta: % oficial × (1 − taxa de cancelamento da loja nas comissões
+                          decididas dos últimos 180 dias, com amostra mínima); sem amostra, a bruta (dito)
+                                                                                       sem dados se não oficial
   vendedor                loja oficial = 1; vendedor comum = 0,5                       sem dados se a loja não informa
   estoque                 ≥ 10 un. = 1; 1–9 = 0,5 (risco de esgotar); 0 = recusa      sem dados se não informado
   potencial de conversão  fator de cliques do aprendizado (1,0 = média) ÷ 2            sem dados abaixo da amostra
@@ -105,9 +107,20 @@ def _fatores(o: dict, ap: Aprendizado, p: PesosRanking) -> tuple[list[Fator], li
     else:
         fatores.append(Fator("desconto comprovado", 0.0, p.desconto, "desconto NÃO comprovado pelo histórico (vale 0)"))
     if o.get("comissao_pct") is not None and o.get("dados_confiaveis"):
-        c = float(o["comissao_pct"])
-        fatores.append(Fator("comissão", min(c / p.comissao_meta, 1.0) if p.comissao_meta else 0, p.comissao,
-                             f"comissão oficial de {c:.1f}%"))
+        bruta = float(o["comissao_pct"])
+        canc = o.get("cancelamento") or {}
+        if canc.get("taxa") is not None:
+            c = bruta * (1 - canc["taxa"])
+            texto = (f"comissão líquida de {c:.1f}% (oficial {bruta:.1f}% − {100 * canc['taxa']:.0f}% de cancelamento "
+                     f"em {canc['amostra']} comissões decididas da loja)")
+        else:
+            c = bruta
+            texto = f"comissão oficial de {bruta:.1f}%"
+            if canc:
+                sem_dados.append(f"comissão líquida: só {canc.get('amostra', 0)} comissões decididas da loja "
+                                 f"(mínimo {canc.get('minimo')}); usada a comissão bruta")
+        o["comissao_liquida_pct"] = c
+        fatores.append(Fator("comissão", min(c / p.comissao_meta, 1.0) if p.comissao_meta else 0, p.comissao, texto))
         if c >= p.comissao_meta * 0.7:
             motivos.append(f"comissão de {c:.1f}%")
     else:
@@ -146,7 +159,8 @@ def classificar(ofertas: list[dict], ap: Aprendizado, sat: Saturacao, equivalenc
         com_dados = [f for f in fatores if f.nota is not None]
         peso_total = sum(f.peso for f in com_dados)
         base = 100 * sum(f.peso * f.nota for f in com_dados) / peso_total if peso_total else 0.0
-        receita, texto_receita = receita_esperada(ap, o.get("preco"), o.get("comissao_pct") if o.get("dados_confiaveis") else None, fator)
+        receita, texto_receita = receita_esperada(ap, o.get("preco"), (o.get("comissao_liquida_pct") or o.get("comissao_pct"))
+                                                  if o.get("dados_confiaveis") else None, fator)
         if receita is None:
             sem_dados.append(texto_receita)
         d = Decisao(o["promocao_id"], True, o.get("classificacao") or "boa", round(base, 2), receita,

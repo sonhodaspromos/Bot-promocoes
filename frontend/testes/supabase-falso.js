@@ -75,6 +75,12 @@ const DADOS = {
     { tipo: "saturacao", calculado_em: agora, dados: { canais: { telegram: { saturado: false, explicacao: "telegram: dados insuficientes para medir saturação" } }, categorias_cheias: {} } },
   ],
   experimentos: [],
+  vw_financeiro_mensal: [
+    { mes: hoje.slice(0, 8) + "01", receita_estimada_brl: 40, receita_confirmada_brl: 120, receita_recebida_brl: 50,
+      receita_cancelada_brl: 5, custos_faturados_usd: 10, custos_estimados_usd: 30, whatsapp_consumido_usd: 2 },
+  ],
+  custos_servicos: [{ id: 1, mes: hoje.slice(0, 8) + "01", servico: "supabase", valor_usd: 10, origem: "fatura", observacao: "plano" }],
+  orcamento_consumo: [{ servico: "whatsapp", dia: hoje, gasto_usd: 4.5, teto_usd: 5 }],
   vw_conciliacao_comissoes: [
     { marketplace: "shopee", competencia: "2026-09-01", valor_pendente: 0, valor_confirmado: 25.5, valor_cancelado: 4, valor_pago: 0, pendentes_antigas: 0, confirmadas_sem_repasse: 2, repasse: null },
   ],

@@ -52,7 +52,7 @@ class MemoriaRepositorio(Repositorio):
                                   "fila", "historico", "comissoes", "execucoes", "logs", "precos", "cupons", "cupons_produtos", "cupons_pub",
                                   "comissoes_importacoes", "selecoes", "equivalentes", "experimentos", "resumos",
                                   "cliques", "comissoes_eventos", "canais_categorias", "tarefas", "alertas",
-                                  "alertas_avisos", "wa_inscritos", "wa_eventos", "wa_envios")}
+                                  "alertas_avisos", "wa_inscritos", "wa_eventos", "wa_envios", "orcamento", "wa_webhook")}
         self.cofre: dict[tuple[str, str], str] = {}
         self.relogio = agora  # os testes trocam para simular a passagem do tempo
         for codigo, nome, doms, modo, padrao in [
@@ -804,6 +804,15 @@ class MemoriaRepositorio(Repositorio):
                 continue
             if pr.get("classificacao") not in ("excelente", "boa"):
                 continue
+            # espelho da migration 021: vigente, preço conferido há até N horas e sem alta desde a publicação
+            if pr.get("fim_em") and pr["fim_em"] <= self.relogio():
+                continue
+            horas = float(self.config.get("vitrine.max_horas_sem_conferir", 24))
+            conferido = prod.get("verificado_em")
+            if not conferido or conferido < self.relogio() - timedelta(hours=horas):
+                continue
+            if prod.get("preco_atual") is None or float(prod["preco_atual"]) > float(pr["preco_promocional"]) * 1.005:
+                continue
             link = self._link_valido(prod["id"])
             if not link:
                 continue
@@ -815,7 +824,8 @@ class MemoriaRepositorio(Repositorio):
                           "desconto_comprovado": comp, "imagem_url": prod.get("imagem_url"), "marca": prod.get("marca"),
                           "categoria": cat["nome"] if cat else None,
                           "marketplace_nome": self._um("marketplaces", id=prod["marketplace_id"])["nome"],
-                          "link_id": link["id"], "publicada_em": pr.get("publicada_em")})
+                          "marketplace_codigo": self._um("marketplaces", id=prod["marketplace_id"])["codigo"],
+                          "link_id": link["id"], "publicada_em": pr.get("publicada_em"), "conferido_em": conferido})
         return saida
 
     def cupons_vitrine(self):
@@ -906,8 +916,91 @@ class MemoriaRepositorio(Repositorio):
     def whatsapp_reservar(self, inscrito_id, promocao_id):
         if self._um("wa_envios", inscrito_id=inscrito_id, promocao_id=promocao_id):
             return False
-        self.t["wa_envios"].append({"inscrito_id": inscrito_id, "promocao_id": promocao_id})
+        self.t["wa_envios"].append({"inscrito_id": inscrito_id, "promocao_id": promocao_id, "reservado_em": self.relogio()})
         return True
+
+    # ------------------------------------------------ espelho da migration 021 (limites atômicos, fila)
+    def _orc(self, servico):
+        o = self._um("orcamento", servico=servico, dia=self._hoje())
+        if not o:
+            o = {"servico": servico, "dia": self._hoje(), "gasto": 0.0, "teto": 0.0, "alertado": False}
+            self.t["orcamento"].append(o)
+        return o
+
+    def orcamento_reservar(self, servico, valor, teto):
+        o = self._orc(servico)
+        o["teto"] = float(teto)
+        if round(o["gasto"] + float(valor), 6) > float(teto):
+            return False
+        o["gasto"] = round(o["gasto"] + float(valor), 4)
+        return True
+
+    def orcamento_estornar(self, servico, valor):
+        o = self._orc(servico)
+        o["gasto"] = max(0.0, round(o["gasto"] - abs(float(valor)), 4))
+
+    def orcamento_situacao(self, servico):
+        o = self._orc(servico)
+        pct = round(100 * o["gasto"] / o["teto"], 1) if o["teto"] else 0.0
+        limite = float(self.config.get("financeiro.alerta_pct", 80))
+        alertar = not o["alertado"] and pct >= limite
+        if alertar:
+            o["alertado"] = True
+        return {"gasto_usd": o["gasto"], "teto_usd": o["teto"], "pct": pct, "alertar": alertar}
+
+    def whatsapp_reservar_envio(self, inscrito_id, promocao_id, custo, teto, max_dia):
+        i = self._um("wa_inscritos", id=inscrito_id)
+        if not i or i["descadastrado_em"]:
+            return "descadastrado"
+        if self._um("wa_envios", inscrito_id=inscrito_id, promocao_id=promocao_id):
+            return "repetido"
+        hoje = sum(1 for e in self.t["wa_envios"] if e["inscrito_id"] == inscrito_id
+                   and e.get("reservado_em", self.relogio()).astimezone(timezone(timedelta(hours=-3))).date() == self._hoje())
+        if hoje >= max_dia:
+            return "limite_pessoa"
+        if not self.orcamento_reservar("whatsapp", custo, teto):
+            self.whatsapp_evento(None, "bloqueio_orcamento", None, f"teto US$ {teto}")
+            return "orcamento"
+        self.t["wa_envios"].append({"inscrito_id": inscrito_id, "promocao_id": promocao_id, "reservado_em": self.relogio()})
+        return "ok"
+
+    def taxas_cancelamento(self, dias=180):
+        from .repositorio import _agrupar_cancelamentos
+        limite = (self.relogio() - timedelta(days=dias)).date()
+        pares = []
+        for c in self.t["comissoes"]:
+            data_venda = c.get("data_venda")
+            data_venda = data_venda.date() if hasattr(data_venda, "date") else data_venda
+            if c.get("origem") == "demo" or c.get("status") not in ("confirmada", "paga", "cancelada"):
+                continue
+            if data_venda and str(data_venda) < str(limite):
+                continue
+            m = self._um("marketplaces", id=c.get("marketplace_id"))
+            pares.append((m["codigo"] if m else None, c["status"]))
+        return _agrupar_cancelamentos(pares)
+
+    def tarefa_renovar(self, tarefa_id, worker, bloqueio_min):
+        t = self._um("tarefas", id=tarefa_id)
+        if not t or t["status"] != "processando" or t["worker"] != worker or t["bloqueada_ate"] < self.relogio():
+            return False
+        t["bloqueada_ate"] = self.relogio() + timedelta(minutes=max(bloqueio_min, 1))
+        return True
+
+    def fila_saude(self):
+        agora_ = self.relogio()
+        atraso = timedelta(minutes=float(self.config.get("fila.alerta_atraso_min", 30)))
+        pend = [t for t in self.t["tarefas"] if t["status"] == "pendente" and t["agendada_para"] < agora_ - atraso]
+        travas = [t for t in self.t["tarefas"] if t["status"] == "processando" and t["bloqueada_ate"] < agora_]
+        falhas = [t for t in self.t["tarefas"] if t["status"] == "falhou"]
+        partes = []
+        if falhas:
+            partes.append(f"{len(falhas)} tarefa(s) com falha definitiva nas últimas 24 h")
+        if pend:
+            partes.append(f"{len(pend)} tarefa(s) atrasada(s)")
+        if travas:
+            partes.append(f"{len(travas)} tarefa(s) abandonada(s) (trava vencida)")
+        return {"pendentes_atrasadas": len(pend), "travas_vencidas": len(travas), "falhas_24h": len(falhas),
+                "alerta": bool(partes), "motivo": "; ".join(partes)}
 
     def whatsapp_gasto_hoje(self):
         return round(sum(float(e["custo_usd"] or 0) for e in self.t["wa_eventos"]

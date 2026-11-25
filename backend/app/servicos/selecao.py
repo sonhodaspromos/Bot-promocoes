@@ -59,6 +59,7 @@ class ServicoSelecao:
         ap, sat = self.contexto(cfg)
         dados = self.repo.dados_ranking([c["id"] for c in candidatas])
         ofertas = [dados[c["id"]] for c in candidatas if c["id"] in dados]
+        self._comissao_liquida(ofertas, cfg)
         pares = equivalencia.encontrar(
             [{"id": o["produto_id"], "marketplace": o["marketplace"], "titulo": o.get("titulo") or "",
               "gtin": o.get("gtin"), "marca": o.get("marca"), "modelo": o.get("modelo")} for o in ofertas],
@@ -69,6 +70,21 @@ class ServicoSelecao:
             except ErroBanco as e:
                 self.log.aviso("selecao", "Não consegui gravar produtos equivalentes", erro=str(e))
         return ranking.classificar(ofertas, ap, sat, pares, ranking.PesosRanking.de_config(cfg))
+
+    def _comissao_liquida(self, ofertas: list[dict], cfg: dict) -> None:
+        """Taxa de cancelamento observada por loja (comissões decididas nos últimos 180 dias). Só é usada
+        com amostra mínima; abaixo dela a comissão bruta continua e o motivo aparece em "sem dados"."""
+        minimo = int(_n(cfg, "inteligencia.min_comissoes_cancelamento", 20))
+        try:
+            taxas = self.repo.taxas_cancelamento()
+        except (ErroBanco, NotImplementedError) as e:
+            self.log.aviso("selecao", "Taxa de cancelamento indisponível: comissão bruta nesta rodada", erro=str(e))
+            return
+        for o in ofertas:
+            t = taxas.get(o.get("marketplace") or "")
+            o["cancelamento"] = ({"taxa": t["canceladas"] / t["decididas"], "amostra": t["decididas"]}
+                                 if t and t["decididas"] >= minimo else
+                                 {"taxa": None, "amostra": (t or {}).get("decididas", 0), "minimo": minimo})
 
     def registrar(self, decisoes: list[ranking.Decisao]) -> None:
         try:

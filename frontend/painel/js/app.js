@@ -9,6 +9,7 @@ const TELAS = {
   nova: () => import("./telas/nova.js"),
   cupons: () => import("./telas/cupons.js"),
   comissoes: () => import("./telas/comissoes.js"),
+  financeiro: () => import("./telas/financeiro.js"),
   desempenho: () => import("./telas/desempenho.js"),
   logs: () => import("./telas/logs.js"),
   ajustes: () => import("./telas/ajustes.js"),

@@ -105,6 +105,8 @@ begin
   teste := 'vitrine: só ofertas reais publicadas com link validado; "De" só com desconto comprovado';
   begin
     select * into r from testes.cenario();
+    -- desde a migration 021 a vitrine exige preço conferido recentemente e sem alta (ver 15_auditoria_expansao)
+    update public.produtos set verificado_em = now(), preco_atual = 100 where id = r.prod;
     update public.promocoes set status = 'publicada', publicada_em = now(),
            analise = '{"desconto_comprovado": false, "teste": true}'::jsonb where id = r.promo;
     select count(*), max(preco_referencia) into n, detalhe from public.ofertas_vitrine(7);

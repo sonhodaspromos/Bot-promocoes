@@ -62,6 +62,10 @@ jobs:
         run: supabase/homologacao/rodar.sh homologacao
       - name: Concorrência da fila, interrupções, parada de emergência, backup e restauração
         run: supabase/homologacao/concorrencia_e_backup.sh homologacao
+      - name: Concorrência da expansão (workers, orçamento, WhatsApp, webhook)
+        run: supabase/homologacao/concorrencia_expansao.sh homologacao
+      - name: Migrations 020/021 - aplicar, reverter e reaplicar
+        run: supabase/homologacao/migracoes_ida_volta.sh
 
   painel:
     runs-on: ubuntu-latest
@@ -74,6 +78,8 @@ jobs:
       - run: pip install "playwright>=1.47,<2" && python -m playwright install --with-deps chromium
       - name: Painel com dados simulados (login, 2º fator, papéis, convites, botão de emergência)
         run: python frontend/testes/testar_painel.py
+      - name: Vitrine pública (responsividade, acessibilidade, XSS, SEO)
+        run: python frontend/testes/testar_vitrine.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -8,6 +8,11 @@
   "De R$" e % de desconto só aparecem quando o desconto foi comprovado pelo histórico/cupom.
 * Todo link passa pela função de cliques (?c=vitrine): mesmo antifraude e métricas dos canais.
 * Transparência: aviso de publicidade/afiliado no topo de todas as páginas (CONAR) e link de privacidade.
+* Preço: cada card mostra quando o preço foi conferido e avisa que pode ter mudado (exigência da Amazon
+  quando o preço não é atualizado de hora em hora; boa prática para as demais lojas). O banco só entrega
+  oferta vigente, com preço conferido nas últimas 24 h e sem alta desde a publicação.
+* Com oferta da Amazon na página, o aviso do Programa de Associados aparece (Contrato Operacional, seção 5).
+* Acessibilidade: um único h1 por página, foco visível, contraste AA nos botões, imagem quebrada some.
 """
 from __future__ import annotations
 
@@ -15,13 +20,13 @@ import html
 import json
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .textos import reais
 
 CSS = """*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f6f7;color:#1f2328}
-header{background:#ee4d2d;color:#fff;padding:14px 16px}header a{color:#fff;text-decoration:none}h1{font-size:20px;margin:0}
+header{background:#c2361a;color:#fff;padding:14px 16px}header a{color:#fff;text-decoration:none}.marca{font-size:20px;font-weight:700;margin:0}h1{font-size:20px;margin:8px 0}
 .publi{background:#fff3d6;color:#7a5200;font-size:13px;padding:8px 16px}main{max-width:1100px;margin:0 auto;padding:12px}
 nav.cats{display:flex;gap:8px;overflow-x:auto;padding:8px 0}nav.cats a{background:#fff;border-radius:999px;padding:6px 12px;color:#1f2328;text-decoration:none;white-space:nowrap;font-size:14px}
 .filtros{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.filtros input,.filtros select{padding:10px;border:1px solid #d0d7de;border-radius:10px;font-size:15px;flex:1;min-width:140px}
@@ -29,9 +34,10 @@ nav.cats{display:flex;gap:8px;overflow-x:auto;padding:8px 0}nav.cats a{backgroun
 .card{background:#fff;border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:6px}.card img{width:100%;aspect-ratio:1;object-fit:contain;border-radius:10px;background:#fafafa}
 .card h2,.card h3{font-size:14px;margin:0;line-height:1.3}.preco{font-size:18px;font-weight:700}.de{color:#57606a;text-decoration:line-through;font-size:13px}
 .off{background:#1a7f37;color:#fff;border-radius:6px;padding:1px 6px;font-size:12px}.loja{color:#57606a;font-size:12px}
-.botao{display:block;text-align:center;background:#ee4d2d;color:#fff;border-radius:10px;padding:10px;text-decoration:none;font-weight:600;margin-top:auto}
+.botao{display:block;text-align:center;background:#c2361a;color:#fff;border-radius:10px;padding:10px;text-decoration:none;font-weight:600;margin-top:auto}
 .cupom{background:#fff;border:2px dashed #ee4d2d;border-radius:12px;padding:12px;margin-bottom:10px}code{background:#f0f0f0;padding:2px 6px;border-radius:6px}
-footer{color:#57606a;font-size:12px;text-align:center;padding:24px 12px}[hidden]{display:none!important}"""
+footer{color:#57606a;font-size:12px;text-align:center;padding:24px 12px}[hidden]{display:none!important}
+a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #0969da;outline-offset:2px}.conferido{color:#57606a;font-size:11px}"""
 
 JS = """const q=document.getElementById('busca'),c=document.getElementById('categoria'),m=document.getElementById('loja'),o=document.getElementById('ordem');
 function norm(t){return (t||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase()}
@@ -61,6 +67,20 @@ def _https(url) -> str | None:
     return url if isinstance(url, str) and url.startswith("https://") else None
 
 
+AVISO_AMAZON = "Como Associado Amazon, ganho com compras qualificadas."
+FUSO = timezone(timedelta(hours=-3))
+
+
+def _conferido(valor) -> str | None:
+    if not valor:
+        return None
+    try:
+        t = valor if isinstance(valor, datetime) else datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t.astimezone(FUSO).strftime("%d/%m às %H:%M")
+
+
 class GeradorVitrine:
     def __init__(self, url_base: str, url_cliques: str, nome: str = "Ofertas"):
         self.base = url_base.rstrip("/")
@@ -70,7 +90,7 @@ class GeradorVitrine:
     def link(self, o: dict) -> str:
         return f"{self.cliques}?l={int(o['link_id'])}&c=vitrine"
 
-    def _pagina(self, titulo, descricao, caminho, corpo, json_ld=None, extra_head=""):
+    def _pagina(self, titulo, descricao, caminho, corpo, json_ld=None, extra_head="", amazon=False):
         canon = f"{self.base}/{caminho}".rstrip("/") if caminho else self.base + "/"
         ld = f'<script type="application/ld+json">{json.dumps(json_ld, ensure_ascii=False).replace("</", "<\\/")}</script>' if json_ld else ""
         return f"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
@@ -79,8 +99,8 @@ class GeradorVitrine:
 <meta property="og:title" content="{_e(titulo)}"><meta property="og:description" content="{_e(descricao[:200])}">
 <meta property="og:type" content="website"><meta property="og:url" content="{_e(canon)}">{extra_head}
 <style>{CSS}</style>{ld}</head><body>
-<header><h1><a href="{_e(self.base)}/">{_e(self.nome)}</a></h1></header>
-<div class="publi" role="note">#publi · Esta página contém links de afiliado: podemos ganhar comissão nas compras, sem custo extra para você. Preços e estoque podem mudar na loja.</div>
+<header><p class="marca"><a href="{_e(self.base)}/">{_e(self.nome)}</a></p></header>
+<div class="publi" role="note">#publi · Esta página contém links de afiliado: podemos ganhar comissão nas compras, sem custo extra para você. Preços e estoque podem mudar na loja.{(" " + AVISO_AMAZON) if amazon else ""}</div>
 <main>{corpo}</main>
 <footer>Preços conferidos pelo bot; confirme na loja antes de comprar. <a href="{_e(self.base)}/privacidade.html">Privacidade</a> · <a href="{_e(self.base)}/cupons.html">Cupons</a></footer>
 </body></html>"""
@@ -92,9 +112,12 @@ class GeradorVitrine:
         return (f'<article class="card" data-titulo="{_e(_norm(o["titulo"]))}" data-categoria="{_e(o.get("categoria") or "")}" '
                 f'data-loja="{_e(o.get("marketplace_nome") or "")}" data-preco="{float(o["preco"]):.2f}" '
                 f'data-desconto="{float(o.get("desconto_pct") or 0) if o.get("desconto_comprovado") else 0:.0f}" data-ordem="{int(o.get("ordem", 0))}">'
-                + (f'<img src="{_e(img)}" alt="{_e(o["titulo"])}" loading="lazy" width="300" height="300">' if img else "")
+                + (f'<img src="{_e(img)}" alt="{_e(o["titulo"])}" loading="lazy" width="300" height="300" '
+                   f'referrerpolicy="no-referrer" onerror="this.remove()">' if img else "")
                 + f'<{nivel}><a href="oferta/{int(o["promocao_id"])}-{slug(o["titulo"])}.html">{_e(o["titulo"])}</a></{nivel}>'
                 f'<div>{de}</div><div class="preco">{reais(o["preco"])}</div>'
+                + (f'<div class="conferido">preço conferido em {_e(_conferido(o.get("conferido_em")))}; pode ter mudado na loja</div>'
+                   if _conferido(o.get("conferido_em")) else "")
                 + (f'<div>🎟 cupom <code>{_e(o["cupom_codigo"])}</code></div>' if o.get("cupom_codigo") else "")
                 + f'<div class="loja">{_e(o.get("marketplace_nome") or "")}</div>'
                 f'<a class="botao" href="{_e(self.link(o))}" rel="sponsored nofollow noopener" target="_blank">Ver na loja</a></article>')
@@ -105,6 +128,7 @@ class GeradorVitrine:
         (saida / "oferta").mkdir(exist_ok=True)
         (saida / "categoria").mkdir(exist_ok=True)
         ofertas = [o for o in ofertas if o.get("link_id") and o.get("preco") and not o.get("demo")]
+        amz = lambda lista: any((o.get("marketplace_codigo") or "").lower() == "amazon" for o in lista)  # noqa: E731
         for i, o in enumerate(ofertas):
             o.setdefault("ordem", len(ofertas) - i)
         categorias = sorted({o["categoria"] for o in ofertas if o.get("categoria")})
@@ -125,14 +149,16 @@ class GeradorVitrine:
         vazio = "" if ofertas else "<p>Nenhuma oferta no momento. Volte mais tarde!</p>"
         (saida / "index.html").write_text(self._pagina(
             f"{self.nome} · ofertas do dia", f"{len(ofertas)} ofertas com preço conferido e cupons de desconto.", "",
-            nav + filtros + vazio + grade + f"<script>{JS}</script>", lista_ld), encoding="utf-8")
+            "<h1>Ofertas do dia</h1>" + nav + filtros + vazio + grade + f"<script>{JS}</script>", lista_ld,
+            amazon=amz(ofertas)), encoding="utf-8")
         for cat in categorias:
             da_cat = [o for o in ofertas if o.get("categoria") == cat]
             (saida / "categoria" / f"{slug(cat)}.html").write_text(self._pagina(
                 f"Ofertas de {cat} · {self.nome}", f"{len(da_cat)} ofertas de {cat} com preço conferido.",
                 f"categoria/{slug(cat)}.html",
-                f'<p><a href="../index.html">← todas</a></p><h2>{_e(cat)}</h2><div class="grade">'
-                + "".join(self._card(o).replace('href="oferta/', 'href="../oferta/') for o in da_cat) + "</div>"), encoding="utf-8")
+                f'<p><a href="../index.html">← todas</a></p><h1>{_e(cat)}</h1><div class="grade">'
+                + "".join(self._card(o).replace('href="oferta/', 'href="../oferta/') for o in da_cat) + "</div>",
+                amazon=amz(da_cat)), encoding="utf-8")
         for o in ofertas:
             caminho = f"oferta/{int(o['promocao_id'])}-{slug(o['titulo'])}.html"
             produto = {"@context": "https://schema.org", "@type": "Product", "name": o["titulo"],
@@ -146,17 +172,18 @@ class GeradorVitrine:
                 f"{o['titulo'][:60]} por {reais(o['preco'])} · {self.nome}",
                 f"{o['titulo']} por {reais(o['preco'])} na {o.get('marketplace_nome') or 'loja'}.", caminho,
                 '<p><a href="../index.html">← todas as ofertas</a></p><div class="grade" style="grid-template-columns:1fr">'
-                + self._card(o, "h1").replace('href="oferta/', 'href="../oferta/') + "</div>", produto), encoding="utf-8")
+                + self._card(o, "h1").replace('href="oferta/', 'href="../oferta/') + "</div>", produto,
+                amazon=amz([o])), encoding="utf-8")
         blocos = "".join(f'<div class="cupom"><b>{_e(c["titulo"])}</b> · {_e(c.get("marketplace_nome") or "")}<br>'
                          + (f'Código: <code>{_e(c["codigo"])}</code><br>' if c.get("codigo") else "")
                          + (f'<span class="loja">{_e(c["condicoes"])}</span><br>' if c.get("condicoes") else "")
                          + f'<span class="loja">válido até {_e(c["fim_em"])}</span></div>' for c in cupons)
         (saida / "cupons.html").write_text(self._pagina(
             f"Cupons de desconto · {self.nome}", f"{len(cupons)} cupons válidos.", "cupons.html",
-            '<p><a href="index.html">← ofertas</a></p><h2>Cupons</h2>' + (blocos or "<p>Nenhum cupom válido agora.</p>")), encoding="utf-8")
+            '<p><a href="index.html">← ofertas</a></p><h1>Cupons</h1>' + (blocos or "<p>Nenhum cupom válido agora.</p>")), encoding="utf-8")
         (saida / "privacidade.html").write_text(self._pagina(
             f"Privacidade · {self.nome}", "Como tratamos seus dados.", "privacidade.html",
-            "<h2>Privacidade</h2><p>Esta vitrine não usa cookies nem formulários. Ao clicar em uma oferta, registramos o "
+            "<h1>Privacidade</h1><p>Esta vitrine não usa cookies nem formulários. Ao clicar em uma oferta, registramos o "
             "clique de forma pseudonimizada (resumo criptográfico do IP e do navegador, nunca o IP) para contar acessos "
             "e evitar fraude. Os registros são apagados em até 365 dias. Contato: veja o perfil oficial.</p>"), encoding="utf-8")
         urls = [""] + [f"categoria/{slug(c)}.html" for c in categorias] + \

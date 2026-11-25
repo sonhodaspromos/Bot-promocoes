@@ -114,11 +114,26 @@ def cmd_worker(args, log: Log) -> int:
     tipos = [t for t in (args.tipos.split(",") if args.tipos else handlers) if t in handlers]
     r = Worker(repo, {t: handlers[t] for t in tipos}, log).rodar(max_tarefas=args.max)
     print(r)
+    alerta = alerta_fila(repo, log)
     try:
         repo.gravar_logs(None, log.retirar_pendentes())
     except Exception:
         pass
-    return 1 if r["falhas"] else 0
+    # código 1 = o GitHub Actions marca a execução como falha e avisa o dono por e-mail
+    return 1 if r["falhas"] or alerta else 0
+
+
+def alerta_fila(repo, log: Log) -> bool:
+    """Fila acumulada, tarefa abandonada ou falha definitiva viram ERRO no log (painel) e código de saída 1."""
+    try:
+        s = repo.fila_saude()
+    except Exception as e:  # noqa: BLE001
+        log.aviso("worker", f"Saúde da fila indisponível: {e}")
+        return False
+    if s.get("alerta"):
+        log.erro("worker", f"ALERTA da fila: {s.get('motivo')}")
+        return True
+    return False
 
 
 def cmd_comissoes(args, log: Log) -> int:

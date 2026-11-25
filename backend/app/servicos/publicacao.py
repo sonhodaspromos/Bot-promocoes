@@ -123,7 +123,7 @@ class ServicoPublicacao:
                     prioridade = 1 if promo.get("origem") == "manual" else 5
                     quando = None
                     if agendar and promo.get("origem") != "manual":
-                        quando = self._agendar(cfg, agora, canal["id"], ultimos)
+                        quando = self._agendar(cfg, agora, canal["id"], ultimos, promo["id"], codigo)
                     if self.repo.enfileirar(promo["id"], canal["id"], promo["link_id"], prioridade,
                                             *((quando,) if quando else ())):
                         n += 1
@@ -142,8 +142,10 @@ class ServicoPublicacao:
         try:
             regras = self.repo.canais_categorias()
         except ErroBanco as e:
-            self.log.aviso("publicacao", "Regras de canais por categoria indisponíveis; uso todos os canais", erro=str(e))
-            regras = {}
+            # sem as regras não dá para saber o que cada canal extra aceita: publica só nos canais padrão
+            self.log.aviso("publicacao", "Regras de canais por categoria indisponíveis; canais extras pulados nesta rodada",
+                           erro=str(e))
+            return list(CANAIS_POR_OFERTA), {}
         return list(CANAIS_POR_OFERTA) + sorted(extras), regras
 
     @staticmethod
@@ -151,7 +153,8 @@ class ServicoPublicacao:
         permitidas = regras.get(canal_id)
         return not permitidas or promo.get("categoria_id") in permitidas
 
-    def _agendar(self, cfg: dict, agora, canal_id: int, ultimos: dict):
+    def _agendar(self, cfg: dict, agora, canal_id: int, ultimos: dict, promocao_id: int | None = None,
+                 canal_codigo: str | None = None):
         from .agendamento import proximo_horario
         if canal_id not in ultimos:
             try:
@@ -162,6 +165,10 @@ class ServicoPublicacao:
             ap, _ = self.selecao.contexto(cfg)
         except Exception:
             ap = None
+        exp = self._experimento_ativo()
+        if exp and exp.get("tipo") == "horario" and promocao_id is not None and \
+                atribuir_variante(exp["id"], promocao_id, canal_codigo or str(canal_id)) == "B":
+            ap = None   # variante B do A/B de horário: próximo horário livre, sem o aprendizado
         h = proximo_horario(cfg, agora, ultimos[canal_id], ap)
         self.log.info("agendamento", f"Canal {canal_id}: post agendado para {h.quando.isoformat()} ({h.explicacao})")
         return h.quando
@@ -506,7 +513,10 @@ class ServicoPublicacao:
         if achado and (not achado[0].demo or dados.get("demo")):
             dados["cupom_codigo"], dados["preco_com_cupom"] = achado[0].codigo, achado[1]
         aplicar_desconto_da_analise(dados)
-        foto = arte.abrir_foto(self._foto(dados.get("imagem_url"), cache))
+        # Amazon: a imagem do produto não é baixada nem re-hospedada na arte (regras de uso de conteúdo do
+        # Programa de Associados); a arte sai com o fundo padrão.
+        url_foto = None if (dados.get("marketplace") or "").lower() == "amazon" else dados.get("imagem_url")
+        foto = arte.abrir_foto(self._foto(url_foto, cache))
         link = f"{self.url_cliques}?l={item.link_afiliado_id}&c={canal.codigo}"
         exp = self._experimento_ativo()
         variante_legenda = variante_arte = "A"
@@ -515,8 +525,9 @@ class ServicoPublicacao:
             self._extras[item.id] = {"experimento_id": exp["id"], "variante": variante}
             if exp.get("tipo") == "legenda":
                 variante_legenda = variante
-            else:
+            elif exp.get("tipo") == "arte":
                 variante_arte = variante
+            # "horario": a variante já decidiu o agendamento na fila; aqui só é registrada
         if variante_arte == "B":
             cfg = dict(cfg, **{"visual.cor_principal": cfg.get("experimentos.arte_b_cor") or "#1F2937"})
         if canal.codigo.startswith("instagram"):

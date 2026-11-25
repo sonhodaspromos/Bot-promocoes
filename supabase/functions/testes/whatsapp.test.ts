@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acoes, assinaturaValida, intencao, telefoneE164 } from "../_compartilhado/whatsapp.ts";
+import { acoes, assinaturaValida, intencao, mensagens, telefoneE164 } from "../_compartilhado/whatsapp.ts";
 
 test("consentimento só com pedido explícito; saída com qualquer palavra de saída", () => {
   assert.equal(intencao("QUERO OFERTAS"), "entrar");
@@ -35,4 +35,14 @@ test("extrai ações só de mensagens de texto", () => {
   ] } }] }] };
   assert.deepEqual(acoes(p), [{ telefone: "+5581911112222", acao: "entrar" }, { telefone: "+5581933334444", acao: "sair" }]);
   assert.deepEqual(acoes(null), []);
+});
+
+test("mensagens trazem id e hora de envio; sem id ou timestamp são descartadas (não dá para deduplicar)", () => {
+  const p = { entry: [{ changes: [{ value: { messages: [
+    { id: "wamid.AAA1", timestamp: "1764100000", from: "5581911112222", type: "text", text: { body: "QUERO OFERTAS" } },
+    { from: "5581933334444", type: "text", text: { body: "sair" } },
+    { id: "wamid.AAA2", timestamp: "abc", from: "5581933334444", type: "text", text: { body: "sair" } },
+  ] } }] }] };
+  assert.deepEqual(mensagens(p), [{ telefone: "+5581911112222", acao: "entrar", id: "wamid.AAA1", enviadaEm: "2025-11-25T19:46:40.000Z" }]);
+  assert.deepEqual(mensagens({}), []);
 });

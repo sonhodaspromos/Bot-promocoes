@@ -7,6 +7,8 @@ Sem ambiente (só testes e `simular`): com credenciais -> REAL; sem -> DEMONSTRA
 """
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 
 from ..ambiente import Ambiente
@@ -102,8 +104,8 @@ def _montar_por_ambiente(config: Config, ordenacao: int, amb: Ambiente) -> Integ
         from .fontes.amazon import AmazonFonte
         integ.fontes["amazon"] = AmazonFonte(
             config.credencial("amazon", "CREDENTIAL_ID"), config.credencial("amazon", "CREDENTIAL_SECRET"),
-            config.credencial("amazon", "PARTNER_TAG"), config.credencial("amazon", "TOKEN_URL"),
-            config.credencial("amazon", "API_URL"), ClienteHTTP("amazon", timeout=t))
+            config.credencial("amazon", "PARTNER_TAG"), os.environ.get("AMAZON_TOKEN_URL") or None,
+            os.environ.get("AMAZON_API_URL") or None, http=ClienteHTTP("amazon", timeout=t))
 
     if amb.nome == "homologacao":  # nunca publica de verdade, nem com token configurado
         integ.canais = {c: DemoCanal(c) for c in ("telegram", "instagram_story", "instagram_feed")}
@@ -211,11 +213,10 @@ def montar_validacao(config: Config, amb: Ambiente, ordenacao: int = 2, *,
         "aliexpress": (["ALIEXPRESS_APP_KEY", "ALIEXPRESS_APP_SECRET", "ALIEXPRESS_TRACKING_ID"], lambda: AliExpressFonte(
             config.credencial("aliexpress", "APP_KEY"), config.credencial("aliexpress", "APP_SECRET"),
             config.credencial("aliexpress", "TRACKING_ID"), ro("aliexpress"))),
-        "amazon": (["AMAZON_CREDENTIAL_ID", "AMAZON_CREDENTIAL_SECRET", "AMAZON_PARTNER_TAG", "AMAZON_TOKEN_URL",
-                    "AMAZON_API_URL"], lambda: AmazonFonte(
+        "amazon": (["AMAZON_CREDENTIAL_ID", "AMAZON_CREDENTIAL_SECRET", "AMAZON_PARTNER_TAG"], lambda: AmazonFonte(
             config.credencial("amazon", "CREDENTIAL_ID"), config.credencial("amazon", "CREDENTIAL_SECRET"),
-            config.credencial("amazon", "PARTNER_TAG"), config.credencial("amazon", "TOKEN_URL"),
-            config.credencial("amazon", "API_URL"), ro("amazon"))),
+            config.credencial("amazon", "PARTNER_TAG"), os.environ.get("AMAZON_TOKEN_URL") or None,
+            os.environ.get("AMAZON_API_URL") or None, http=ro("amazon"))),
         "whatsapp": (["WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID", "WHATSAPP_TEMPLATE"], lambda: ClienteWhatsApp(
             config.credencial("whatsapp", "TOKEN"), config.credencial("whatsapp", "PHONE_ID"),
             config.credencial("whatsapp", "TEMPLATE"), ro("whatsapp"))),

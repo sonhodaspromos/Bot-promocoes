@@ -2,6 +2,8 @@
 
 Branch `feat/expansao-modular`, criada a partir de `feat/inteligencia-comercial`. Data: 25/11/2026.
 
+> **Atualização (auditoria de 25/11/2026):** ver `docs/RELATORIO_AUDITORIA_EXPANSAO_MODULAR.md`. A auditoria corrigiu o adaptador Amazon (endereços oficiais da região NA agora são o padrão, token em JSON com escopo e `x-marketplace`), tornou o orçamento do WhatsApp atômico, protegeu o webhook contra replay, adicionou o rollup diário de cliques e corrigiu a atribuição de cliques às publicações. Os números de carga desta página foram substituídos pelos do relatório da auditoria (1 mil a 500 mil cliques/dia).
+
 > **Situação: nenhuma integração nova foi validada de verdade.** AliExpress, Amazon e WhatsApp foram
 > implementados conforme a documentação pública e testados só com dublês (respostas simuladas). Eles
 > continuam **desligados**: as flags estão em `false` e os marketplaces estão em modo `desativado`. Uma

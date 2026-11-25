@@ -53,3 +53,21 @@ export function acoes(payload: unknown): Acao[] {
   }
   return saida;
 }
+
+export type Mensagem = Acao & { id: string; enviadaEm: string };
+/** Como `acoes`, mas com o id da mensagem (deduplicação) e a hora em que a pessoa enviou (ordem/replay).
+ *  Mensagem sem id ou sem timestamp válido é descartada: não dá para provar que não é repetição. */
+export function mensagens(payload: unknown): Mensagem[] {
+  const saida: Mensagem[] = [];
+  const p = payload as { entry?: { changes?: { value?: { messages?: { id?: string; timestamp?: string; from?: string; type?: string; text?: { body?: string } }[] } }[] }[] };
+  for (const e of p?.entry ?? []) for (const c of e.changes ?? []) for (const m of c.value?.messages ?? []) {
+    if (m.type !== "text") continue;
+    const tel = telefoneE164(m.from);
+    const a = intencao(m.text?.body);
+    const id = String(m.id ?? "");
+    const ts = Number(m.timestamp);
+    if (!tel || !a || id.length < 4 || id.length > 200 || !Number.isFinite(ts) || ts <= 0) continue;
+    saida.push({ telefone: tel, acao: a, id, enviadaEm: new Date(ts * 1000).toISOString() });
+  }
+  return saida;
+}

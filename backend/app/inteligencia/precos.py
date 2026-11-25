@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 
-JANELAS = (7, 30, 90)
+JANELAS = (7, 30, 60, 90)
 
 
 @dataclass

@@ -49,33 +49,46 @@ class ServicoWhatsApp:
         self.repo, self.cliente, self.log, self.url_cliques, self.relogio = repo, cliente, log, url_cliques, relogio
 
     def enviar_oferta(self, oferta: dict, cfg: dict) -> dict:
+        """Envia a oferta a quem consentiu. Cada envio passa por UMA reserva atômica no banco
+        (whatsapp_reservar_envio): descadastro, repetição, limite por pessoa e teto diário são conferidos
+        com as linhas travadas, então dois workers simultâneos nunca estouram o orçamento nem o limite."""
         custo = float(cfg.get("whatsapp.custo_mensagem_usd") or 0.0625)
         teto = float(cfg.get("whatsapp.orcamento_diario_usd") or 0)
         max_pessoa = int(cfg.get("whatsapp.max_por_inscrito_dia") or 3)
-        gasto = self.repo.whatsapp_gasto_hoje()
         resumo = {"enviados": 0, "falhas": 0, "bloqueado_orcamento": False, "custo_usd": 0.0}
         link = f"{self.url_cliques}?l={int(oferta['link_id'])}&c=whatsapp"
         for p in self.repo.whatsapp_destinatarios(oferta.get("categoria_id"), max_pessoa, oferta["promocao_id"]):
-            if gasto + custo > teto:
+            situacao = self.repo.whatsapp_reservar_envio(p["id"], oferta["promocao_id"], custo, teto, max_pessoa)
+            if situacao == "orcamento":
                 resumo["bloqueado_orcamento"] = True
-                self.repo.whatsapp_evento(None, "bloqueio_orcamento", None, f"teto de US$ {teto:.2f} atingido")
                 self.log.aviso("whatsapp", f"Teto diário de US$ {teto:.2f} atingido: envio interrompido")
                 break
-            if not self.repo.whatsapp_reservar(p["id"], oferta["promocao_id"]):
-                continue   # já enviado (ou reservado) para esta pessoa
+            if situacao != "ok":
+                continue   # repetido, limite da pessoa ou descadastrado (conferido com a linha travada)
             try:
                 self.cliente.enviar_template(p["telefone"], [oferta["titulo"][:200], reais(oferta["preco"]), link])
-                gasto += custo
                 resumo["enviados"] += 1
                 resumo["custo_usd"] = round(resumo["custo_usd"] + custo, 4)
                 self.repo.whatsapp_evento(p["id"], "envio", custo, f"oferta {oferta['promocao_id']}")
             except ErroIntegracao as e:
                 resumo["falhas"] += 1
-                # incerto: pode ter sido entregue → conta o custo e não reenvia (a reserva fica)
                 if e.incerto:
-                    gasto += custo
+                    # pode ter sido entregue: o custo reservado fica e a reserva impede reenvio
+                    resumo["custo_usd"] = round(resumo["custo_usd"] + custo, 4)
+                else:
+                    self.repo.orcamento_estornar("whatsapp", custo)   # recusa certa: não houve cobrança
                 self.repo.whatsapp_evento(p["id"], "falha", custo if e.incerto else None, str(e)[:300])
+        self._alertar_consumo()
         return resumo
+
+    def _alertar_consumo(self) -> None:
+        try:
+            s = self.repo.orcamento_situacao("whatsapp")
+        except Exception:  # noqa: BLE001 — alerta nunca derruba o envio
+            return
+        if s.get("alertar"):
+            self.log.erro("whatsapp", f"Consumo do WhatsApp em {s['pct']:.0f}% do teto diário "
+                                      f"(US$ {s['gasto_usd']:.2f} de US$ {s['teto_usd']:.2f})")
 
 
 PALAVRAS_SAIR = {"sair", "parar", "stop", "cancelar", "descadastrar"}

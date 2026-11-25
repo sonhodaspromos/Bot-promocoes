@@ -21,6 +21,17 @@ def agora() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _agrupar_cancelamentos(pares):
+    saida: dict[str, dict] = {}
+    for codigo, status in pares:
+        if not codigo:
+            continue
+        d = saida.setdefault(codigo, {"canceladas": 0, "decididas": 0})
+        d["decididas"] += 1
+        d["canceladas"] += status == "cancelada"
+    return saida
+
+
 def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
@@ -208,6 +219,13 @@ class Repositorio(ABC):
     def whatsapp_destinatarios(self, categoria_id: int | None, max_dia: int, promocao_id: int) -> list[dict]: raise NotImplementedError
     def whatsapp_reservar(self, inscrito_id: int, promocao_id: int) -> bool: raise NotImplementedError
     def whatsapp_gasto_hoje(self) -> float: raise NotImplementedError
+    def whatsapp_reservar_envio(self, inscrito_id: int, promocao_id: int, custo: float, teto: float, max_dia: int) -> str: raise NotImplementedError
+    def orcamento_reservar(self, servico: str, valor: float, teto: float) -> bool: raise NotImplementedError
+    def orcamento_estornar(self, servico: str, valor: float) -> None: raise NotImplementedError
+    def orcamento_situacao(self, servico: str) -> dict: raise NotImplementedError
+    def tarefa_renovar(self, tarefa_id: int, worker: str, bloqueio_min: int) -> bool: raise NotImplementedError
+    def fila_saude(self) -> dict: raise NotImplementedError
+    def taxas_cancelamento(self, dias: int = 180) -> dict[str, dict]: raise NotImplementedError
     def whatsapp_evento(self, inscrito_id: int | None, tipo: str, custo: float | None, detalhe: str | None) -> None: raise NotImplementedError
     def whatsapp_inscrever(self, telefone: str, origem: str, texto: str, categorias: list[int] | None = None) -> int: raise NotImplementedError
     def whatsapp_descadastrar(self, telefone: str) -> bool: raise NotImplementedError
@@ -808,6 +826,36 @@ class SupabaseRepositorio(Repositorio):
 
     def whatsapp_gasto_hoje(self):
         return float(self._rpc("whatsapp_gasto_hoje") or 0)
+
+    def whatsapp_reservar_envio(self, inscrito_id, promocao_id, custo, teto, max_dia):
+        return str(self._rpc("whatsapp_reservar_envio", p_inscrito=inscrito_id, p_promocao=promocao_id, p_custo=custo,
+                             p_teto=teto, p_max_dia=max_dia))
+
+    def orcamento_reservar(self, servico, valor, teto):
+        return self._rpc("orcamento_reservar", p_servico=servico, p_valor=valor, p_teto=teto) is True
+
+    def orcamento_estornar(self, servico, valor):
+        self._rpc("orcamento_estornar", p_servico=servico, p_valor=valor)
+
+    def orcamento_situacao(self, servico):
+        r = self._rpc("orcamento_situacao", p_servico=servico) or [{}]
+        r = r[0] if isinstance(r, list) else r
+        return {"gasto_usd": float(r.get("gasto_usd") or 0), "teto_usd": float(r.get("teto_usd") or 0),
+                "pct": float(r.get("pct") or 0), "alertar": bool(r.get("alertar"))}
+
+    def tarefa_renovar(self, tarefa_id, worker, bloqueio_min):
+        return self._rpc("tarefa_renovar", p_id=tarefa_id, p_worker=worker, p_bloqueio_min=bloqueio_min) is True
+
+    def fila_saude(self):
+        r = self._rpc("fila_saude") or [{}]
+        return r[0] if isinstance(r, list) else r
+
+    def taxas_cancelamento(self, dias=180):
+        """Comissões DECIDIDAS (confirmada, paga ou cancelada) por loja, para a comissão líquida."""
+        desde = (agora() - timedelta(days=dias)).date().isoformat()
+        linhas = self._get("comissoes", select="status,marketplaces!inner(codigo)", data_venda=f"gte.{desde}",
+                           origem="neq.demo", status="in.(confirmada,paga,cancelada)", limit="20000")
+        return _agrupar_cancelamentos([((l.get("marketplaces") or {}).get("codigo"), l["status"]) for l in linhas])
 
     def whatsapp_evento(self, inscrito_id, tipo, custo, detalhe):
         self._req("POST", "whatsapp_eventos", prefer="return=minimal",
