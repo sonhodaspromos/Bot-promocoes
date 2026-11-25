@@ -108,13 +108,23 @@ def cmd_comissoes(args, log: Log) -> int:
 
 
 def cmd_validar(args, log: Log) -> int:
-    config, repo, integ, amb = _montar_real(log)
-    from .integracoes.imagens.imgbb import ImgBB
+    """Validação REAL somente leitura. Não usa registro.montar (que em homologação troca os canais por
+    simulados e por isso reprovava tudo): monta clientes reais com HTTP que barra qualquer escrita."""
+    from .cliente_http import ClienteHTTPSomenteLeitura
     from .validacao_integracoes import validar
-    imgbb = ImgBB(config.credencial("imgbb", "KEY"), ClienteHTTP("imgbb")) if args.imgbb else None
-    print(f"Validando integrações REAIS do ambiente {amb.nome.upper()} (somente leitura; nada é publicado)")
-    return validar(integ, repo, log, imgbb=imgbb, link_manual=args.link, http=ClienteHTTP("validacao"),
-                   saida=SAIDA / "validacao_integracoes.json")
+    carregar_env()
+    amb = ler_ambiente(os.environ)
+    base = ler_config()
+    repo = SupabaseRepositorio(base.supabase_url, base.supabase_chave, ClienteHTTP("supabase", timeout=base.timeout_http))
+    config = ler_config(buscar_no_cofre=repo.obter_credencial)
+    log.adicionar_segredos(config.segredos)
+    cfg = repo.configuracoes()
+    conferir_banco(amb, cfg)
+    alvos = registro.montar_validacao(config, amb, int(cfg.get("busca.ordenacao_shopee") or 2),
+                                      permitir_envio_imgbb=args.imgbb)
+    print(f"Validando integrações REAIS · ambiente {amb.nome.upper()} · modo SOMENTE LEITURA (nada é publicado)")
+    return validar(alvos, repo, log, link_manual=args.link, http=ClienteHTTPSomenteLeitura("validacao"),
+                   saida=SAIDA / "validacao_integracoes.json", ambiente=amb.nome)
 
 
 def cmd_arte(args, log: Log) -> int:

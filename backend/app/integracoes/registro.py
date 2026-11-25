@@ -105,3 +105,86 @@ def _montar_por_ambiente(config: Config, ordenacao: int, amb: Ambiente) -> Integ
                 tipo, config.credencial("instagram", "TOKEN"), config.credencial("instagram", "USER_ID"),
                 hospedagem, ClienteHTTP("instagram", timeout=t))
     return integ
+
+
+# ============================================================================ validação somente leitura
+CATEGORIAS = ("real", "manual", "simulada", "desativada")
+
+
+@dataclass
+class AlvoValidacao:
+    """Uma integração a validar. categoria: real | manual | simulada | desativada."""
+    nome: str
+    categoria: str
+    obrigatoria: bool
+    cliente: object | None = None   # objeto com .testar(); None = não há o que chamar
+    motivo: str = ""
+
+
+def montar_validacao(config: Config, amb: Ambiente, ordenacao: int = 2, *,
+                     permitir_envio_imgbb: bool = False) -> list[AlvoValidacao]:
+    """Monta clientes REAIS para validar credenciais, permissões e cotas, com HTTP somente leitura:
+    qualquer chamada que publicaria ou alteraria algo é barrada (EscritaBloqueada) antes de sair.
+
+    Funciona em homologação e produção. Obrigatórias = INTEGRACOES_ATIVAS. Integração sem credencial e
+    fora da lista fica 'desativada' (não reprova); dentro da lista, reprova. A fonte manual do Mercado
+    Livre é 'manual': aparece no relatório, mas nunca aprova nem reprova.
+    """
+    from ..cliente_http import ClienteHTTPSomenteLeitura
+
+    if amb.nome == "demonstracao":
+        raise ErroConfiguracao("validar-integracoes confere integrações REAIS: use AMBIENTE=homologacao "
+                               "(ou producao). Em demonstração tudo é simulado e nada seria validado.")
+    if config.forcar_demo:
+        raise ErroConfiguracao(f"Conflito: AMBIENTE={amb.nome} com MODO_DEMO ligado. Remova MODO_DEMO.")
+    t = config.timeout_http
+    ro = lambda servico, **kw: ClienteHTTPSomenteLeitura(servico, timeout=t, tentativas=2, **kw)  # noqa: E731
+    alvos: list[AlvoValidacao] = []
+
+    def sem_credencial(nome, obrigatoria, faltam):
+        if obrigatoria:
+            return AlvoValidacao(nome, "real", True, None, f"credencial ausente: {', '.join(faltam)}")
+        return AlvoValidacao(nome, "desativada", False, None, "sem credencial e fora de INTEGRACOES_ATIVAS")
+
+    # Shopee
+    obrig = "shopee" in amb.ativas
+    if config.modo("shopee") == REAL:
+        alvos.append(AlvoValidacao("shopee", "real", obrig, ShopeeFonte(
+            config.credencial("shopee", "APP_ID"), config.credencial("shopee", "SECRET"), ro("shopee"), ordenacao=ordenacao),
+            "" if obrig else "credencial presente, mas fora de INTEGRACOES_ATIVAS (validada só para informação)"))
+    else:
+        alvos.append(sem_credencial("shopee", obrig, ["SHOPEE_APP_ID", "SHOPEE_SECRET"]))
+
+    # Telegram
+    obrig = "telegram" in amb.ativas
+    if config.modo("telegram") == REAL:
+        alvos.append(AlvoValidacao("telegram", "real", obrig, TelegramCanal(
+            config.credencial("telegram", "TOKEN"), config.credencial("telegram", "CANAL"), ro("telegram"))))
+    else:
+        alvos.append(sem_credencial("telegram", obrig, ["TELEGRAM_TOKEN", "TELEGRAM_CANAL"]))
+
+    # Instagram (+ ImgBB, que hospeda as imagens que o Instagram baixa)
+    obrig = "instagram" in amb.ativas
+    if config.modo("instagram") == REAL:
+        hospedagem = ImgBB(config.credencial("imgbb", "KEY"), ro("imgbb", permitir_envio_imgbb=permitir_envio_imgbb)) \
+            if config.modo("imgbb") == REAL else None
+        alvos.append(AlvoValidacao("instagram", "real", obrig, InstagramCanal(
+            "feed", config.credencial("instagram", "TOKEN"), config.credencial("instagram", "USER_ID"),
+            hospedagem, ro("instagram"))))
+        if hospedagem is None:
+            alvos.append(sem_credencial("imgbb", obrig, ["IMGBB_KEY"]))
+        elif permitir_envio_imgbb:
+            alvos.append(AlvoValidacao("imgbb", "real", obrig, hospedagem,
+                                       "envio de teste AUTORIZADO (1 pixel, expira em 60 s)"))
+        else:
+            alvos.append(AlvoValidacao("imgbb", "real", obrig, None,
+                                       "o ImgBB não tem consulta somente leitura: sem --imgbb (envio de teste de 1 pixel "
+                                       "que expira em 60 s) a chave NÃO é verificada"))
+    else:
+        alvos.append(sem_credencial("instagram", obrig, ["IG_TOKEN", "IG_USER_ID"]))
+        if obrig and config.modo("imgbb") != REAL:
+            alvos.append(sem_credencial("imgbb", True, ["IMGBB_KEY"]))
+
+    alvos.append(AlvoValidacao("mercado_livre", "manual", False, ManualFonte("mercado_livre"),
+                               "fonte manual: ofertas cadastradas no painel (sem API); não entra na aprovação"))
+    return alvos

@@ -37,10 +37,16 @@ def _dominio_ok(url: str, dominios: list[str]) -> bool:
     return any(host == d or host.endswith("." + d) for d in dominios)
 
 
+from .requisitos import COLUNAS_PUBLICACAO, CONFIGS_PUBLICACAO, RPCS_PUBLICACAO  # noqa: E402
+
+
 class MemoriaRepositorio(Repositorio):
     def __init__(self):
         self._ids = itertools.count(1)
         self.config = dict(CONFIG_PADRAO)
+        # espelho de public.esquema_publicacao() de um banco com a migration 018
+        self.esquema = {"versao": 18, "rpcs": sorted(RPCS_PUBLICACAO), "configuracoes": sorted(CONFIGS_PUBLICACAO),
+                        "colunas": sorted(COLUNAS_PUBLICACAO)}
         self.t = {k: [] for k in ("marketplaces", "canais", "categorias", "produtos", "promocoes", "links",
                                   "fila", "historico", "comissoes", "execucoes", "logs", "precos", "cupons", "cupons_produtos", "cupons_pub",
                                   "comissoes_importacoes")}
@@ -146,16 +152,23 @@ class MemoriaRepositorio(Repositorio):
     def _mkt_do_produto(self, produto_id):
         return self._um("marketplaces", id=self._um("produtos", id=produto_id)["marketplace_id"])
 
-    def links_pendentes(self, limite):
+    def links_pendentes(self, limite, revalidar_atribuicao_horas=None):
         saida = []
         for l in self.t["links"]:
-            if l["validado"] or not l["ativo"] or l["status_http"] is not None:
+            if not l["ativo"]:
+                continue
+            nunca = not l["validado"] and l["status_http"] is None
+            vencida = False
+            if revalidar_atribuicao_horas and l["validado"]:
+                quando = l.get("atribuicao_verificada_em")
+                vencida = quando is None or self.relogio() - quando > timedelta(hours=float(revalidar_atribuicao_horas))
+            if not (nunca or vencida):
                 continue
             if not any(pr["produto_id"] == l["produto_id"] and pr["status"] in ("aprovada", "publicada")
                        for pr in self.t["promocoes"]):
                 continue
             mkt = self._mkt_do_produto(l["produto_id"])
-            saida.append({"link_id": l["id"], "url": l["url"], "produto_id": l["produto_id"],
+            saida.append({"link_id": l["id"], "url": l.get("url_curta") or l["url"], "produto_id": l["produto_id"],
                           "demo": self._um("produtos", id=l["produto_id"])["demo"],
                           "marketplace": mkt["codigo"], "dominios": mkt["dominios_afiliado"],
                           "padrao": mkt.get("padrao_afiliado"), "dominios_destino": mkt.get("dominios_destino"),
@@ -171,7 +184,8 @@ class MemoriaRepositorio(Repositorio):
             raise RegraViolada("link sem atribuição de afiliado", codigo="P0024")
         mudou = l["validado"] != resultado.valido
         l.update(validado=resultado.valido, status_http=resultado.status_http,
-                 motivo_invalido=None if resultado.valido else resultado.motivo)
+                 motivo_invalido=None if resultado.valido else resultado.motivo,
+                 atribuicao_verificada_em=self.relogio() if resultado.valido and resultado.atribuicao else None)
         if mudou:
             self._invalidar_analise(l["produto_id"])
 
@@ -255,6 +269,39 @@ class MemoriaRepositorio(Repositorio):
         f = self._um("fila", id=fila_id)
         if f and f["status"] == "processando":
             f["publicando_desde"] = self.relogio()
+
+    def reservar_envio(self, fila_id):
+        f = self._um("fila", id=fila_id)
+        if not f or f["status"] != "processando" or f.get("publicando_desde"):
+            return False
+        if f.get("bloqueado_ate") and f["bloqueado_ate"] <= self.relogio():
+            return False
+        f["publicando_desde"] = self.relogio()
+        return True
+
+    def reservar_envio_cupom(self, cupom_id, canal_id):
+        c, canal = self._um("cupons", id=cupom_id), self._um("canais", id=canal_id)
+        dia = self.relogio().astimezone(timezone(timedelta(hours=-3))).date().isoformat()
+        meus = [p for p in self.t["cupons_pub"] if p["cupom_id"] == cupom_id and p["canal_id"] == canal_id and p["dia"] == dia]
+        reservas = sum(1 for p in meus if p["resultado"] == "enviando")
+        fim = sum(1 for p in meus if p["resultado"] in ("sucesso", "erro"))
+        if any(p["resultado"] == "sucesso" for p in meus) or reservas > fim:
+            return None
+        if not self._vigente(c):
+            raise RegraViolada("cupom fora da validade ou pausado", codigo="P0025")
+        if c["demo"] and canal["modo"] == "real":
+            raise RegraViolada("cupom demo em canal real", codigo="P0015")
+        r = {"id": self._id(), "cupom_id": cupom_id, "canal_id": canal_id, "dia": dia, "resultado": "enviando",
+             "id_mensagem": None, "erro": None, "demo": c["demo"] or canal["modo"] == "demo"}
+        self.t["cupons_pub"].append(r)
+        return r["id"]
+
+    def esquema_publicacao(self):
+        return dict(self.esquema)
+
+    def link_atribuicao(self, link_id):
+        l = self._um("links", id=link_id)
+        return l.get("atribuicao_verificada_em") if l else None
 
     def devolver_fila(self, fila_id, minutos, motivo):
         f = self._um("fila", id=fila_id)

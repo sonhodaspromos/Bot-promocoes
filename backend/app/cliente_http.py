@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from .erros import ErroIntegracao
+from .erros import ErroIntegracao, EscritaBloqueada
 
 TEMPORARIOS = {408, 425, 429, 500, 502, 503, 504}
 NAVEGADOR = "Mozilla/5.0 (compatible; BotDeOfertas/2.0; +https://github.com)"
@@ -78,7 +78,10 @@ class ClienteHTTP:
                     self.falhas_seguidas[servidor] = 0  # o servidor respondeu: está no ar
                     raise ultimo
                 if not repetir and resp.status_code != 429:
-                    raise ultimo  # 5xx num envio: o canal pode ter publicado; não repete
+                    # 5xx/408 num envio: o serviço pode ter publicado antes de falhar. Marca como INCERTO
+                    # para o item nunca ser reenviado automaticamente (evita post duplicado).
+                    ultimo.incerto = True
+                    raise ultimo
             if tentativa < self.tentativas:
                 self.dormir(self.espera_inicial * (2 ** (tentativa - 1)))
         assert ultimo is not None
@@ -95,3 +98,52 @@ class ClienteHTTP:
 
 def _servidor(url: str) -> str:
     return (urlparse(url).hostname or "?").lower()
+
+
+# ------------------------------------------------------------------------ validação somente leitura
+TELEGRAM_LEITURA = {"getMe", "getChat", "getChatMember", "getChatAdministrators"}
+
+
+def chamada_de_leitura(metodo: str, url: str, kwargs: dict, permitir_envio_imgbb: bool = False) -> bool:
+    """True se a chamada só LÊ dados. Tudo que não está nesta lista é tratado como escrita."""
+    metodo = metodo.upper()
+    host = (urlparse(url).hostname or "").lower()
+    caminho = urlparse(url).path
+    if metodo in ("GET", "HEAD"):
+        return True
+    if metodo != "POST":
+        return False
+    if host == "api.telegram.org":
+        return caminho.rsplit("/", 1)[-1] in TELEGRAM_LEITURA
+    if host.endswith("shopee.com.br") and caminho.endswith("/graphql"):
+        corpo = kwargs.get("data") or kwargs.get("json") or b""
+        if isinstance(corpo, (bytes, bytearray)):
+            corpo = corpo.decode("utf-8", "ignore")
+        texto = corpo if isinstance(corpo, str) else str(corpo)
+        try:
+            import json as _json
+            consulta = (_json.loads(texto) or {}).get("query", "") if texto.strip().startswith("{") else texto
+        except ValueError:
+            consulta = texto
+        return not str(consulta).lstrip().lower().startswith("mutation")
+    if host == "api.imgbb.com":
+        return permitir_envio_imgbb  # não existe consulta de leitura no ImgBB: só um envio de teste autorizado
+    return False
+
+
+class ClienteHTTPSomenteLeitura(ClienteHTTP):
+    """Cliente usado pelo `validar-integracoes`: qualquer chamada de escrita (publicar, criar mídia,
+    gerar link, editar mensagem) é BLOQUEADA antes de sair do bot."""
+
+    def __init__(self, servico: str, *, permitir_envio_imgbb: bool = False, **kw):
+        super().__init__(servico, **kw)
+        self.permitir_envio_imgbb = permitir_envio_imgbb
+        self.chamadas: list[str] = []
+
+    def requisitar(self, metodo, url, **kwargs):
+        if not chamada_de_leitura(metodo, url, kwargs, self.permitir_envio_imgbb):
+            caminho = urlparse(url).path.rsplit("/", 1)[-1]
+            raise EscritaBloqueada(f"{self.servico}: chamada de escrita bloqueada no modo somente leitura "
+                                   f"({metodo.upper()} {urlparse(url).hostname}/…/{caminho})")
+        self.chamadas.append(f"{metodo.upper()} {urlparse(url).hostname}")
+        return super().requisitar(metodo, url, **kwargs)

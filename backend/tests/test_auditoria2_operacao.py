@@ -42,13 +42,13 @@ def test_falha_do_monitor_nunca_derruba_a_rodada():
 
 
 def test_validacao_reprova_integracao_em_demo(tmp_path):
-    """Teste simulado NÃO aprova integração real: modo demo = reprovado."""
-    integ = registro.Integracoes(fontes={"demo": DemoFonte()}, canais={"telegram": DemoCanal("telegram")})
+    """Teste simulado NÃO aprova integração real: categoria simulada não conta e, sem obrigatória, reprova."""
+    alvos = [registro.AlvoValidacao("telegram", "simulada", False, DemoCanal("telegram"), "simulado")]
     saida = tmp_path / "v.json"
-    assert validar(integ, MemoriaRepositorio(), Log(), saida=saida) == 1
+    assert validar(alvos, MemoriaRepositorio(), Log(), saida=saida) == 1
     ev = json.loads(saida.read_text())
     assert ev["aprovado"] is False
-    assert all(not i["aprovado"] for i in ev["itens"])
+    assert "telegram" not in ev["validadas_de_verdade"]
     assert any(i["integracao"] == "atribuicao_afiliado" for i in ev["itens"])
 
 
@@ -76,7 +76,7 @@ def test_evidencia_nao_contem_segredo(tmp_path):
             raise ErroIntegracao("token 123:SEGREDO recusado", servico="shopee")
     log = Log(segredos=["123:SEGREDO"])
     saida = tmp_path / "v.json"
-    validar(registro.Integracoes(fontes={"shopee": Fonte()}, canais={}), MemoriaRepositorio(), log, saida=saida)
+    validar([registro.AlvoValidacao("shopee", "real", True, Fonte())], MemoriaRepositorio(), log, saida=saida)
     assert "123:SEGREDO" not in saida.read_text()
 
 

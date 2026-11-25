@@ -94,15 +94,41 @@ def validar_link(url: str, dominios: list[str], http: ClienteHTTP | None, *, dem
     destinos = dominios_destino if dominios_destino is not None else None
     if destinos is not None and not host_permitido(host(final), list(destinos) + list(dominios)):
         return ResultadoValidacao(False, f"o link termina em {host(final)}, que não é um site da loja", status)
-    if len(cadeia) > 1 and urlparse(final).path in ("", "/") and not urlparse(final).query:
+    pagina_inicial = urlparse(final).path in ("", "/")
+    if len(cadeia) > 1 and pagina_inicial and (not urlparse(final).query or exigir_atribuicao):
         return ResultadoValidacao(False, "o link leva para a página inicial da loja (afiliação expirada ou inválida)", status)
+    atribuicao = False
     if params:
         valores = {k.lower(): v for k, v in parse_qsl(urlparse(final).query, keep_blank_values=True)}
         achados = {p: valores[p] for p in params if p in valores}
         if not achados:
             return ResultadoValidacao(False, "o link perdeu o identificador de afiliado no caminho "
                                              f"(esperado um destes parâmetros: {', '.join(params)})", status)
-        if id_afiliado and not any(str(id_afiliado).lower() in v.lower() for v in achados.values()):
+        if id_afiliado and not any(contem_id(v, id_afiliado) for v in achados.values()):
             return ResultadoValidacao(False, "o identificador de afiliado do link é de outra conta: a comissão não seria sua", status)
+        # comprovação: chegou a um site de DESTINO da loja (não ficou no encurtador) com o parâmetro
+        # e, se configurado, com o SEU ID de afiliado
+        no_destino = bool(destinos) and host_permitido(host(final), list(destinos)) and len(cadeia) > 1
+        atribuicao = no_destino and (bool(id_afiliado) or not exigir_atribuicao)
+    if exigir_atribuicao:
+        if not destinos:
+            return ResultadoValidacao(False, "configure os domínios de destino da loja (marketplaces.dominios_destino): "
+                                             "sem eles não dá para provar que o link chega à loja", status)
+        if not id_afiliado:
+            return ResultadoValidacao(False, "configure o seu ID de afiliado (marketplaces.id_afiliado): sem ele não dá "
+                                             "para provar que a comissão é sua", status)
+        if not atribuicao:
+            return ResultadoValidacao(False, "atribuição não comprovada: o link não chegou ao site da loja com o seu "
+                                             "identificador de afiliado" + (f" (a loja bloqueou o robô, HTTP {status})"
+                                                                            if status in BLOQUEIO_ROBO else ""), status)
     # 2xx = abriu. 401/403/429 = a loja respondeu, mas bloqueia robôs: o link existe.
-    return ResultadoValidacao(True, None if 200 <= status < 300 else f"loja bloqueou o robô (HTTP {status})", status)
+    return ResultadoValidacao(True, None if 200 <= status < 300 else f"loja bloqueou o robô (HTTP {status})", status,
+                              atribuicao=atribuicao)
+
+
+def contem_id(valor: str, id_afiliado: str) -> bool:
+    """O ID de afiliado precisa aparecer como um TOKEN inteiro do valor (12 não casa com 3124)."""
+    alvo = str(id_afiliado).strip().lower()
+    if not alvo:
+        return False
+    return re.search(r"(?<![0-9a-z])" + re.escape(alvo) + r"(?![0-9a-z])", str(valor).lower()) is not None

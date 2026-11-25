@@ -12,6 +12,14 @@ Recuperação de falhas (auditoria):
   * resultado incerto (timeout depois de enviar) → o item NÃO é repetido (evita post duplicado);
   * banco fora do ar → para de publicar na hora; o que já foi enviado fica marcado como
     "publicando" e o banco nunca o publica de novo sozinho.
+
+Auditoria corretiva P0:
+  * antes de QUALQUER envio, o item é reservado com exclusividade no banco (fila_reservar_envio).
+    Se a reserva não for gravada (erro, RPC ausente, trava vencida), NADA é enviado;
+  * antes do primeiro envio real da rodada, o esquema do banco é conferido (migrations e RPCs);
+  * qualquer falha DEPOIS de chamar o canal (5xx, conexão caída, resposta ilegível, erro ao gravar o
+    resultado) é tratada como resultado incerto: o item nunca é reenviado automaticamente;
+  * em produção, só publica link com atribuição de afiliado comprovada recentemente.
 """
 from __future__ import annotations
 
@@ -28,6 +36,7 @@ from .cupons import melhor_cupom
 from ..rede import ImagemRecusada, baixar_imagem
 from .comum import agora_utc, ajuste, dentro_do_horario, fuso, inicio_do_dia, num
 from .validacao import LinkTemporariamenteIndisponivel, validar_link
+from ..requisitos import faltando_para_publicar
 
 CANAIS_POR_OFERTA = ("telegram", "instagram_story")  # o feed recebe só a oferta imperdível do dia
 
@@ -42,11 +51,15 @@ class ServicoPublicacao:
         self.relogio = relogio
         self.canais_bloqueados: dict[str, str] = {}  # canal → motivo (token vencido nesta rodada)
         self._cota: dict[str, int | None] = {}       # cota restante do Instagram, consultada 1x por rodada
+        self._bloqueio_real: str | None = None       # motivo para não publicar em canal real nesta rodada
+        self._requisitos_conferidos = False
 
     # ------------------------------------------------------------ 1. validar links
     def validar_links(self, cfg: dict, limite: int = 30) -> tuple[int, int]:
         ok = recusados = 0
-        for p in self.repo.links_pendentes(limite):
+        exigir = bool(cfg.get("links.exigir_atribuicao"))
+        horas = float(cfg.get("links.validade_atribuicao_horas") or 72) if exigir else None
+        for p in self.repo.links_pendentes(limite, revalidar_atribuicao_horas=horas):
             try:
                 r = validar_link(p["url"], p["dominios"], self.http, demo=p["demo"], padrao=p.get("padrao"),
                                  verificar_http=bool(ajuste(cfg, "monitor.verificar_links")),
@@ -144,6 +157,7 @@ class ServicoPublicacao:
         ok = falhas = 0
         self._cfg = cfg
         fotos: dict[int, bytes | None] = {}
+        self.conferir_requisitos()
         itens = self.repo.pegar_fila(limite)
         for n, item in enumerate(itens):
             canal_db = canais_por_id.get(item.canal_id) or {}
@@ -151,6 +165,9 @@ class ServicoPublicacao:
             canal = self.canais.get(codigo)
             if codigo in self.canais_bloqueados:
                 self._devolver(item, 60, f"canal pausado nesta rodada: {self.canais_bloqueados[codigo]}")
+                continue
+            if canal is not None and canal.modo == "real" and self._bloqueio_real:
+                self._devolver(item, 60, f"publicação real bloqueada: {self._bloqueio_real}")
                 continue
             if canal is not None and canal.modo == "real" and self.parada_ativa():
                 self._devolver(item, 30, "parada de emergência ligada: nenhuma publicação real")
@@ -179,6 +196,11 @@ class ServicoPublicacao:
         if erro:
             return self._registrar_falha(item, codigo, erro)
         if canal.modo == "real":
+            motivo = self._atribuicao_pendente(dados, cfg)
+            if motivo:
+                self.log.aviso("publicacao", f"{codigo}: não publicado — {motivo}", promocao_id=item.promocao_id)
+                self._devolver(item, 60, motivo)
+                return False
             motivo = self._preco_mudou(dados, cfg)
             if motivo:
                 self.log.aviso("publicacao", f"{codigo}: não publicado — {motivo}", promocao_id=item.promocao_id)
@@ -194,16 +216,29 @@ class ServicoPublicacao:
             self.log.aviso("publicacao", f"{codigo}: cota de publicações da API esgotada; volta mais tarde")
             self._devolver(item, 60, "cota diária da API do Instagram esgotada")
             return False
-        self._marcar_publicando(item)
+        if not self._reservar_envio(item, canal, codigo):
+            return False
+        # ---- a partir daqui o canal pode ter recebido o post: nada volta para a fila automaticamente
         try:
             id_msg = canal.publicar(conteudo)
         except ErroIntegracao as e:
             return self._tratar_erro_canal(item, canal, codigo, e)
+        except Exception as e:  # resposta inesperada do canal depois do envio: pode ter publicado
+            return self._tratar_erro_canal(item, canal, codigo, ErroIntegracao(
+                f"{codigo}: falha inesperada durante o envio ({type(e).__name__}: {e})", servico=codigo, incerto=True))
         try:
             self.repo.registrar_publicacao(item, True, id_msg, None)
         except RegraViolada as e:
-            self.log.critico("publicacao", "O banco recusou registrar a publicação", codigo=e.codigo, erro=str(e))
+            self.log.critico("publicacao", "O banco recusou registrar a publicação (o post SAIU no canal)",
+                             codigo=e.codigo, erro=str(e), mensagem=id_msg, promocao_id=item.promocao_id)
             return False
+        except ErroBanco as e:
+            # post enviado, resultado não gravado: o item continua reservado e o banco o encerra como
+            # "resultado incerto" — nunca é reenviado. Registro no log para conferência manual.
+            self.log.critico("publicacao", f"{codigo}: post ENVIADO, mas o banco não gravou o resultado. "
+                             "Não será reenviado; confira o canal.", mensagem=id_msg, promocao_id=item.promocao_id,
+                             fila_id=item.id, erro=str(e))
+            raise
         self.log.info("publicacao", f"{canal.codigo}: publicado ({'DEMO' if canal.modo != 'real' else 'real'})",
                       promocao_id=item.promocao_id, mensagem=id_msg)
         return True
@@ -288,15 +323,48 @@ class ServicoPublicacao:
             self.log.erro("publicacao", "Não consegui registrar a falha", erro=str(e))
         return False
 
-    def _marcar_publicando(self, item) -> None:
+    def conferir_requisitos(self) -> str | None:
+        """Antes do primeiro envio real da rodada: o banco tem as migrations e RPCs exigidas?"""
+        if self._requisitos_conferidos:
+            return self._bloqueio_real
+        self._requisitos_conferidos = True
+        if not any(getattr(c, "modo", "") == "real" for c in self.canais.values()):
+            return None
+        faltas = faltando_para_publicar(self.repo)
+        if faltas:
+            self._bloqueio_real = "banco sem os requisitos de publicação (" + "; ".join(faltas[:5]) + ")"
+            self.log.critico("publicacao", "Publicações REAIS bloqueadas: o banco não tem as migrations/RPCs exigidas. "
+                             "Aplique as migrations pendentes.", faltando=faltas)
+        return self._bloqueio_real
+
+    def _reservar_envio(self, item, canal, codigo) -> bool:
+        """Reserva exclusiva gravada no banco ANTES do envio. Sem reserva, sem envio (nunca permissivo)."""
         try:
-            self.repo.marcar_publicando(item.id)
+            reservado = self.repo.reservar_envio(item.id)
         except ErroBanco as e:
-            if e.status == 404 or (e.codigo or "").startswith("PGRST"):
-                self.log.aviso("publicacao", "Proteção contra post duplicado indisponível: aplique a migration 015",
-                               erro=str(e))
-            else:
-                raise
+            self.log.critico("publicacao", f"{codigo}: não consegui gravar a reserva do envio; NADA foi enviado. "
+                             "Publicação interrompida até o banco responder.", erro=str(e), fila_id=item.id)
+            raise
+        if not reservado:
+            self.log.erro("publicacao", f"{codigo}: o item não está mais reservado para este envio (trava vencida, "
+                          "já enviado ou cancelado). NADA foi enviado.", fila_id=item.id, promocao_id=item.promocao_id)
+            return False
+        return True
+
+    def _atribuicao_pendente(self, dados: dict, cfg: dict) -> str | None:
+        """Em produção (links.exigir_atribuicao), o link precisa ter a atribuição comprovada recentemente."""
+        if not cfg.get("links.exigir_atribuicao"):
+            return None
+        link_id = (dados or {}).get("link_id")
+        if not link_id:
+            return "oferta sem link de afiliado"
+        quando = self.repo.link_atribuicao(link_id)
+        horas = float(cfg.get("links.validade_atribuicao_horas") or 72)
+        if quando is None:
+            return "atribuição de afiliado não comprovada: aguardando o link ser conferido até a loja"
+        if self.relogio() - quando > timedelta(hours=horas):
+            return f"atribuição de afiliado conferida há mais de {horas:.0f} h: aguardando nova conferência"
+        return None
 
     def _devolver(self, item, minutos, motivo) -> None:
         try:

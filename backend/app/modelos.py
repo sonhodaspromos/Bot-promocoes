@@ -36,6 +36,7 @@ class ResultadoValidacao:
     valido: bool
     motivo: str | None = None
     status_http: int | None = None
+    atribuicao: bool = False   # True só quando o parâmetro + o SEU ID de afiliado chegaram ao destino final na loja
 
 
 @dataclass

@@ -1,14 +1,22 @@
-"""Validação das integrações REAIS (somente leitura), com evidência gravada em arquivo.
+"""Validação das integrações REAIS em modo SOMENTE LEITURA, com evidência gravada em arquivo.
 
-  python -m app.main validar-integracoes [--imgbb] [--link URL]
+  AMBIENTE=homologacao INTEGRACOES_ATIVAS=shopee,telegram python -m app.main validar-integracoes [--imgbb] [--link URL]
 
-  * Nada é publicado: Telegram (getMe/getChat/getChatMember), Instagram (me + cota), Shopee
-    (busca de 1 oferta + relatório de conversões das últimas 24 h).
-  * --imgbb  envia 1 imagem de 1 pixel que expira em 60 s (é um envio real: use só com autorização).
-  * Atribuição: o link de afiliado da oferta de amostra (ou --link) é seguido redirecionamento a
-    redirecionamento até o domínio final, exigindo os parâmetros de afiliado e o seu ID de afiliado.
-  * Evidência: saida/validacao_integracoes.json (sem tokens; segredos mascarados pelo Log).
-Integração só é considerada APROVADA quando este comando passa com as credenciais de produção.
+O que é chamado (nada é publicado; o cliente HTTP barra qualquer escrita antes de sair do bot):
+  * Shopee:    busca de 1 oferta + relatório de conversões das últimas 24 h (consultas GraphQL, sem mutation)
+  * Telegram:  getMe, getChat, getChatMember (bot precisa ser admin com permissão de publicar e editar)
+  * Instagram: GET me (conta profissional) + GET content_publishing_limit (cota restante)
+  * ImgBB:     não existe consulta de leitura. Só com --imgbb (envio de 1 pixel que expira em 60 s)
+  * Atribuição: o link de afiliado de amostra é seguido redirecionamento a redirecionamento até a loja,
+               exigindo o parâmetro e o SEU ID de afiliado no destino final
+  * Banco:     versão do esquema, RPCs, configurações e colunas exigidas para publicar de verdade
+
+Categorias: real (validada de verdade) · manual (Mercado Livre: não entra na conta) · simulada ·
+desativada (sem credencial e fora de INTEGRACOES_ATIVAS: não reprova).
+
+APROVADO só quando: (1) há pelo menos UMA integração obrigatória (INTEGRACOES_ATIVAS) e (2) TODAS as
+obrigatórias, a atribuição (se a Shopee for obrigatória) e o esquema do banco foram efetivamente
+verificados com sucesso. "Não verificado" reprova. Evidência: saida/validacao_integracoes.json (sem segredos).
 """
 from __future__ import annotations
 
@@ -18,49 +26,79 @@ from pathlib import Path
 
 from .erros import ErroBot
 from .logs import mascarar
-from .integracoes.base import REAL
-from .servicos.validacao import validar_link
+from .requisitos import faltando_para_publicar
+from .servicos.validacao import LinkTemporariamenteIndisponivel, validar_link
+
+APROVADO, REPROVADO, NAO_VERIFICADO, IGNORADO = "aprovado", "reprovado", "nao_verificado", "ignorado"
 
 
-def validar(integ, repo, log, *, imgbb=None, link_manual: str | None = None, http=None, saida: Path) -> int:
-    resultado = {"executado_em": datetime.now(timezone.utc).isoformat(), "itens": []}
-    falhou = False
+def validar(alvos, repo, log, *, link_manual: str | None = None, http=None, saida: Path, ambiente: str = "") -> int:
+    resultado = {"executado_em": datetime.now(timezone.utc).isoformat(), "ambiente": ambiente,
+                 "modo": "somente_leitura", "itens": []}
 
-    def registrar(nome, ok, detalhe):
-        nonlocal falhou
-        falhou |= not ok
-        resultado["itens"].append({"integracao": nome, "aprovado": ok, "detalhe": mascarar(str(detalhe), log.segredos)})
-        print(f"  {'✔' if ok else '✖'} {nome}: {mascarar(str(detalhe), log.segredos)}")
+    def registrar(nome, categoria, obrigatoria, status, detalhe):
+        texto = mascarar(str(detalhe), log.segredos)
+        resultado["itens"].append({"integracao": nome, "categoria": categoria, "obrigatoria": obrigatoria,
+                                   "status": status, "detalhe": texto})
+        simbolo = {APROVADO: "✔", REPROVADO: "✖", NAO_VERIFICADO: "?", IGNORADO: "·"}[status]
+        marca = " (obrigatória)" if obrigatoria else ""
+        print(f"  {simbolo} {nome} [{categoria}]{marca}: {texto}")
 
-    for item in list(integ.fontes.values()) + list(integ.canais.values()):
-        if getattr(item, "modo", None) != REAL:
-            registrar(item.codigo, False, "não está em modo REAL (sem credencial ou ambiente de demonstração)")
+    shopee = None
+    for a in alvos:
+        if a.categoria in ("manual", "simulada", "desativada"):
+            registrar(a.nome, a.categoria, False, IGNORADO, a.motivo or a.categoria)
+            continue
+        if a.cliente is None:
+            status = NAO_VERIFICADO if "não é verificada" in a.motivo.lower() else REPROVADO
+            registrar(a.nome, a.categoria, a.obrigatoria, status if a.obrigatoria else IGNORADO, a.motivo)
             continue
         try:
-            registrar(item.codigo, True, item.testar())
+            detalhe = a.cliente.testar()
+            registrar(a.nome, a.categoria, a.obrigatoria, APROVADO, (detalhe + (f" · {a.motivo}" if a.motivo else "")))
+            if a.nome == "shopee":
+                shopee = a
         except ErroBot as e:
-            registrar(item.codigo, False, e)
-    if imgbb is not None:
-        try:
-            registrar("imgbb", True, imgbb.testar())
-        except ErroBot as e:
-            registrar("imgbb", False, e)
+            registrar(a.nome, a.categoria, a.obrigatoria, REPROVADO, e)
 
-    # atribuição do link de afiliado (redirecionamentos + identificadores de comissão)
-    shopee = integ.fontes.get("shopee")
-    link = link_manual or getattr(shopee, "amostra_link", None)
+    # atribuição do link de afiliado (obrigatória quando a Shopee é obrigatória)
+    shopee_obrig = any(a.nome == "shopee" and a.obrigatoria for a in alvos)
+    link = link_manual or (getattr(shopee.cliente, "amostra_link", None) if shopee else None)
     mkt = next((m for m in repo.marketplaces() if m["codigo"] == "shopee"), None)
     if not link or not mkt:
-        registrar("atribuicao_afiliado", False, "sem link de amostra (Shopee real) e sem --link")
+        registrar("atribuicao_afiliado", "real", shopee_obrig, REPROVADO if shopee_obrig else IGNORADO,
+                  "sem link de amostra (Shopee real) e sem --link")
     else:
-        r = validar_link(link, mkt.get("dominios_afiliado") or [], http, demo=False, verificar_http=True,
-                         padrao=mkt.get("padrao_afiliado"), dominios_destino=mkt.get("dominios_destino"),
-                         parametros_afiliado=mkt.get("parametros_afiliado"), id_afiliado=mkt.get("id_afiliado"),
-                         exigir_atribuicao=True)
-        registrar("atribuicao_afiliado", r.valido, r.motivo or "destino final na loja com os identificadores de afiliado preservados")
+        try:
+            r = validar_link(link, mkt.get("dominios_afiliado") or [], http, demo=False, verificar_http=True,
+                             padrao=mkt.get("padrao_afiliado"), dominios_destino=mkt.get("dominios_destino"),
+                             parametros_afiliado=mkt.get("parametros_afiliado"), id_afiliado=mkt.get("id_afiliado"),
+                             exigir_atribuicao=True)
+            ok = r.valido and r.atribuicao
+            registrar("atribuicao_afiliado", "real", shopee_obrig or bool(link_manual), APROVADO if ok else REPROVADO,
+                      "parâmetro e ID de afiliado chegaram ao site da loja" if ok else (r.motivo or "sem comprovação"))
+        except LinkTemporariamenteIndisponivel as e:
+            registrar("atribuicao_afiliado", "real", shopee_obrig, NAO_VERIFICADO, f"loja indisponível agora: {e}")
 
-    resultado["aprovado"] = not falhou
-    saida.parent.mkdir(exist_ok=True)
+    # requisitos do banco para publicar de verdade (migrations e RPCs)
+    faltas = faltando_para_publicar(repo)
+    registrar("esquema_banco", "real", True, REPROVADO if faltas else APROVADO,
+              "faltando: " + "; ".join(faltas) if faltas else "migrations e RPCs de publicação presentes (versão ≥ 18)")
+
+    integracoes_obrig = [i for i in resultado["itens"] if i["obrigatoria"]
+                         and i["integracao"] not in ("esquema_banco", "atribuicao_afiliado")]
+    obrigatorios = [i for i in resultado["itens"] if i["obrigatoria"]]
+    motivos = []
+    if not integracoes_obrig:
+        motivos.append("nenhuma integração obrigatória: defina INTEGRACOES_ATIVAS (ex.: shopee,telegram)")
+    motivos += [f"{i['integracao']}: {i['status']}" for i in obrigatorios if i["status"] != APROVADO]
+    aprovado = not motivos
+    resultado["aprovado"] = aprovado
+    resultado["motivos_reprovacao"] = motivos
+    resultado["validadas_de_verdade"] = [i["integracao"] for i in resultado["itens"] if i["status"] == APROVADO]
+    saida.parent.mkdir(parents=True, exist_ok=True)
     saida.write_text(json.dumps(resultado, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n{'APROVADO' if not falhou else 'NÃO APROVADO'} · evidência em {saida}")
-    return 1 if falhou else 0
+    print(f"\n{'APROVADO' if aprovado else 'NÃO APROVADO'} · evidência em {saida}")
+    for m in motivos:
+        print(f"  - {m}")
+    return 0 if aprovado else 1

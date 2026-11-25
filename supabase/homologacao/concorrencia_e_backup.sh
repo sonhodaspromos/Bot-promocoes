@@ -49,6 +49,13 @@ P "$DB" -c "select count(*) from public.pegar_proximas_publicacoes(50, 10)" >/de
 s=$(P "$DB" -c "select status from public.fila_publicacoes where id = (select min(id) from public.fila_publicacoes)")
 [ "$s" = "falhou" ] && ok "sem tentativas restantes vira 'falhou' (não reenvia sem fim)" || erro "status $s"
 
+echo "2b) Reserva do envio disputada por dois processos (migration 018):"
+P "$DB" -c "update public.fila_publicacoes set status='processando', bloqueado_ate=now()+interval '10 minutes', publicando_desde=null where id = (select max(id) from public.fila_publicacoes)"
+R='select public.fila_reservar_envio((select max(id) from public.fila_publicacoes));'
+P "$DB" -c "$R" > /tmp/r1.txt & P "$DB" -c "$R" > /tmp/r2.txt & wait
+n=$(cat /tmp/r1.txt /tmp/r2.txt | grep -c '^t$')
+[ "$n" -eq 1 ] && ok "só um processo consegue reservar o mesmo envio" || erro "$n processos reservaram o mesmo envio"
+
 echo "3) Parada de emergência bloqueia a fila:"
 P "$DB" -c "update public.fila_publicacoes set status='pendente', bloqueado_ate=null, tentativas=0 where status <> 'falhou'"
 P "$DB" <<'SQL'

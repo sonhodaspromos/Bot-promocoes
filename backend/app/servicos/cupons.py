@@ -112,6 +112,9 @@ class ServicoCupons:
                 and canais_db[cod].get("modo") != "desativado"]
         if not ajuste(cfg, "cupons.publicar_telegram"):
             alvo = [c for c in alvo if c != "telegram"]
+        if any(self.pub.canais[c].modo == "real" for c in alvo) and self.pub.conferir_requisitos():
+            alvo = [c for c in alvo if self.pub.canais[c].modo != "real"]  # banco sem requisitos: só simulados
+            self.log.aviso("cupons", f"Cupons em canais reais bloqueados: {self.pub._bloqueio_real}")
         ordem = sorted(vigentes, key=lambda c: (c.origem != "manual", c.fim_em))  # os seus cupons primeiro
         max_stories = int(num(cfg, "cupons.max_stories_dia"))
         publicados = 0
@@ -131,7 +134,13 @@ class ServicoCupons:
                 if self.pub._sem_cota(canal, codigo):
                     self.pub.canais_bloqueados[codigo] = "cota diária da API do Instagram esgotada"
                     break
-                if self._enviar(c, canal, canal_db, cfg):
+                try:
+                    enviado = self._enviar(c, canal, canal_db, cfg)
+                except ErroBanco as e:
+                    self.log.critico("cupons", "Banco indisponível durante a publicação de cupons; interrompido", erro=str(e))
+                    return publicados
+                feitos.append({"cupom_id": c.id, "canal_id": canal_db["id"], "resultado": "enviando", "erro": None})
+                if enviado:
                     publicados += 1
                     sucesso_hoje += 1
                     feitos.append({"cupom_id": c.id, "canal_id": canal_db["id"], "resultado": "sucesso", "erro": None})
@@ -146,6 +155,9 @@ class ServicoCupons:
             return False
         if any((f.get("erro") or "").startswith("incerto") for f in meus):
             return False  # pode ter saído: não repete
+        reservas = sum(1 for f in meus if f["resultado"] == "enviando")
+        if reservas > sum(1 for f in meus if f["resultado"] in ("sucesso", "erro")):
+            return False  # reservado e sem resultado gravado: o envio anterior pode ter saído
         return sum(1 for f in meus if f["resultado"] == "erro") < 2
 
     def _enviar(self, c: Cupom, canal, canal_db: dict, cfg: dict) -> bool:
@@ -155,9 +167,22 @@ class ServicoCupons:
         except Exception as e:
             self.log.erro("cupons", "Não consegui montar a arte do cupom", erro=f"{type(e).__name__}: {e}", cupom_id=c.id)
             return False
+        # reserva gravada ANTES do envio: sem ela, nada sai (e uma reserva sem resultado nunca é reenviada)
+        try:
+            reserva = self.repo.reservar_envio_cupom(c.id, canal_db["id"])
+        except RegraViolada as e:
+            self.log.aviso("cupons", f"{codigo}: cupom não publicado ({e})", cupom_id=c.id)
+            return False
+        if reserva is None:
+            self.log.aviso("cupons", f"{codigo}: cupom já publicado hoje ou envio anterior sem resultado; não reenvio",
+                           cupom_id=c.id)
+            return False
         try:
             id_msg = canal.publicar(conteudo)
-        except ErroIntegracao as e:
+        except Exception as e:  # erro inesperado depois de chamar o canal: pode ter saído
+            if not isinstance(e, ErroIntegracao):
+                e = ErroIntegracao(f"{codigo}: falha inesperada durante o envio ({type(e).__name__}: {e})",
+                                   servico=codigo, incerto=True)
             if e.autenticacao:
                 self.pub.canais_bloqueados[codigo] = "credencial recusada"
                 self.log.critico("cupons", f"{codigo}: o canal recusou a credencial; cupons pausados até corrigir", erro=str(e))
@@ -166,20 +191,28 @@ class ServicoCupons:
                 self.pub.canais_bloqueados[codigo] = "limite da API atingido"
                 self.log.aviso("cupons", f"{codigo}: limite da API atingido", erro=str(e))
                 return False
-            prefixo = "incerto: " if e.incerto else ""
+            if e.incerto:
+                # NÃO grava "erro": a reserva fica sem resultado = incerto = nunca reenviado automaticamente
+                self.log.erro("cupons", f"{codigo}: resultado incerto ao publicar cupom — pode ter saído. Não vou repetir; "
+                              "confira o canal.", erro=str(e), cupom_id=c.id)
+                return False
             self.log.erro("cupons", f"Falha ao publicar cupom em {codigo}", erro=str(e), cupom_id=c.id)
-            self._registrar(c, canal_db, False, None, prefixo + str(e))
+            self._registrar(c, canal_db, False, None, str(e))
             return False
-        self._registrar(c, canal_db, True, id_msg, None)
+        if not self._registrar(c, canal_db, True, id_msg, None):
+            self.log.critico("cupons", f"{codigo}: cupom ENVIADO, mas o resultado não foi gravado. A reserva impede "
+                             "reenvio; confira o canal.", cupom_id=c.id, mensagem=id_msg)
         self.log.info("cupons", f"{codigo}: cupom publicado ({'DEMO' if canal.modo != 'real' else 'real'})",
                       cupom=c.codigo or c.titulo, mensagem=id_msg)
         return True
 
-    def _registrar(self, c, canal_db, sucesso, id_msg, erro):
+    def _registrar(self, c, canal_db, sucesso, id_msg, erro) -> bool:
         try:
             self.repo.registrar_publicacao_cupom(c.id, canal_db["id"], sucesso, id_msg, erro)
+            return True
         except (RegraViolada, ErroBanco) as e:
             self.log.erro("cupons", "Não consegui registrar a publicação do cupom", erro=str(e), cupom_id=c.id)
+            return False
 
     def _montar(self, c: Cupom, cfg: dict) -> ConteudoPublicacao:
         foto = None

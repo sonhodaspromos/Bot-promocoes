@@ -55,7 +55,9 @@ class Repositorio(ABC):
     @abstractmethod
     def salvar_link(self, produto_id: int, promocao_id: int | None, url: str) -> int: ...
     @abstractmethod
-    def links_pendentes(self, limite: int) -> list[dict]: ...
+    def links_pendentes(self, limite: int, revalidar_atribuicao_horas: float | None = None) -> list[dict]:
+        """Links a validar. `url` é o destino EFETIVO do clique (url_curta, se houver). Com
+        revalidar_atribuicao_horas, inclui links já validados sem comprovação recente de atribuição."""
     @abstractmethod
     def registrar_validacao(self, link_id: int, resultado: ResultadoValidacao) -> None: ...
 
@@ -87,6 +89,18 @@ class Repositorio(ABC):
     @abstractmethod
     def produto(self, produto_id: int) -> dict | None:
         """id, id_externo, marketplace (código), preco_atual, disponivel, verificado_em."""
+    @abstractmethod
+    def reservar_envio(self, fila_id: int) -> bool:
+        """Reserva exclusiva do item ANTES do envio externo. False ou erro = não enviar."""
+    @abstractmethod
+    def reservar_envio_cupom(self, cupom_id: int, canal_id: int) -> int | None:
+        """Grava 'enviando' antes de publicar o cupom. None = já publicado hoje ou envio anterior incerto."""
+    @abstractmethod
+    def esquema_publicacao(self) -> dict:
+        """Versão do esquema, RPCs, configurações e colunas exigidas para publicar de verdade."""
+    @abstractmethod
+    def link_atribuicao(self, link_id: int) -> datetime | None:
+        """Quando a atribuição do link foi comprovada (None = nunca)."""
     @abstractmethod
     def marcar_publicando(self, fila_id: int) -> None:
         """Marca o item logo antes de enviar ao canal (proteção contra post duplicado se o job morrer)."""
@@ -291,13 +305,20 @@ class SupabaseRepositorio(Repositorio):
                            corpo={"produto_id": produto_id, "promocao_id": promocao_id, "url": url})
         return linhas[0]["id"]
 
-    def links_pendentes(self, limite):
-        # links nunca verificados, de produtos com promoção aprovada ou publicada
+    def links_pendentes(self, limite, revalidar_atribuicao_horas=None):
+        # links nunca verificados (e, em produção, validados sem atribuição comprovada recentemente),
+        # de produtos com promoção aprovada ou publicada
+        filtro = {"validado": "is.false", "status_http": "is.null"}
+        if revalidar_atribuicao_horas:
+            limite_iso = agora_iso_menos(int(float(revalidar_atribuicao_horas) * 60))
+            filtro = {"or": f"(and(validado.is.false,status_http.is.null),and(validado.is.true,or(atribuicao_verificada_em.is.null,"
+                            f"atribuicao_verificada_em.lt.{limite_iso})))"}
+
         def buscar(colunas):
             return self._get(
                 "links_afiliados",
-                select=f"id,url,produto_id,produtos!inner(demo,marketplaces!inner({colunas}),promocoes!inner(status))",
-                validado="is.false", ativo="is.true", status_http="is.null",
+                select=f"id,url,url_curta,produto_id,produtos!inner(demo,marketplaces!inner({colunas}),promocoes!inner(status))",
+                ativo="is.true", **filtro,
                 **{"produtos.promocoes.status": "in.(aprovada,publicada)"}, limit=str(limite))
         linhas = None
         for colunas in ("codigo,dominios_afiliado,padrao_afiliado,dominios_destino,parametros_afiliado,id_afiliado",
@@ -309,7 +330,7 @@ class SupabaseRepositorio(Repositorio):
             except ErroBanco as e:
                 if e.codigo not in ("42703", "PGRST200", "PGRST204"):
                     raise
-        return [{"link_id": l["id"], "url": l["url"], "produto_id": l["produto_id"],
+        return [{"link_id": l["id"], "url": l.get("url_curta") or l["url"], "produto_id": l["produto_id"],
                  "demo": l["produtos"]["demo"], "marketplace": l["produtos"]["marketplaces"]["codigo"],
                  "dominios": l["produtos"]["marketplaces"]["dominios_afiliado"],
                  "padrao": l["produtos"]["marketplaces"].get("padrao_afiliado"),
@@ -318,10 +339,22 @@ class SupabaseRepositorio(Repositorio):
                  "id_afiliado": l["produtos"]["marketplaces"].get("id_afiliado")} for l in linhas]
 
     def registrar_validacao(self, link_id, resultado):
-        self._req("PATCH", "links_afiliados", params={"id": f"eq.{link_id}"}, prefer="return=minimal", corpo={
-            "validado": resultado.valido, "status_http": resultado.status_http,
-            "motivo_invalido": None if resultado.valido else (resultado.motivo or "inválido")[:300],
-        })
+        corpo = {"validado": resultado.valido, "status_http": resultado.status_http,
+                 "motivo_invalido": None if resultado.valido else (resultado.motivo or "inválido")[:300],
+                 "atribuicao_verificada_em": datetime.now(timezone.utc).isoformat()
+                 if resultado.valido and resultado.atribuicao else None}
+        try:
+            self._req("PATCH", "links_afiliados", params={"id": f"eq.{link_id}"}, prefer="return=minimal", corpo=corpo)
+        except ErroBanco as e:
+            if e.codigo not in ("PGRST204", "42703"):
+                raise
+            corpo.pop("atribuicao_verificada_em")  # banco sem a migration 018: atribuição nunca conta como comprovada
+            self._req("PATCH", "links_afiliados", params={"id": f"eq.{link_id}"}, prefer="return=minimal", corpo=corpo)
+
+    def link_atribuicao(self, link_id):
+        linhas = self._get("links_afiliados", select="atribuicao_verificada_em", id=f"eq.{link_id}")
+        valor = linhas[0].get("atribuicao_verificada_em") if linhas else None
+        return datetime.fromisoformat(valor.replace("Z", "+00:00")) if valor else None
 
     # ------------------------------------------------------------ publicação
     def promocoes_para_enfileirar(self, limite):
@@ -370,6 +403,17 @@ class SupabaseRepositorio(Repositorio):
 
     def marcar_publicando(self, fila_id):
         self._rpc("fila_marcar_publicando", p_id=fila_id)
+
+    def reservar_envio(self, fila_id):
+        # sem fallback: banco sem a RPC (migration 018) = ErroBanco = nada é enviado
+        return self._rpc("fila_reservar_envio", p_id=fila_id) is True
+
+    def reservar_envio_cupom(self, cupom_id, canal_id):
+        r = self._rpc("cupom_reservar_envio", p_cupom=cupom_id, p_canal=canal_id)
+        return int(r) if r is not None else None
+
+    def esquema_publicacao(self):
+        return self._rpc("esquema_publicacao") or {}
 
     def devolver_fila(self, fila_id, minutos, motivo):
         self._rpc("fila_devolver", p_id=fila_id, p_minutos=int(minutos), p_motivo=motivo[:900])
