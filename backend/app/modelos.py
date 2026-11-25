@@ -21,6 +21,8 @@ class OfertaEncontrada:
     categoria_slug: str | None = None
     disponivel: bool = True
     demo: bool = False
+    preco_maximo: float | None = None       # maior preço entre as variações (cor, tamanho...), se a loja informar
+    referencia_derivada: bool = False       # "preço de" calculado a partir de uma taxa de desconto (não é um preço visto)
 
     @property
     def desconto_pct(self) -> float:

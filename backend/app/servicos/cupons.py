@@ -125,6 +125,9 @@ class ServicoCupons:
                     break
                 if not self._pode(c, canal_db, feitos):
                     continue
+                if canal.modo == "real" and self.pub.parada_ativa():
+                    self.log.aviso("cupons", "Parada de emergência ligada: cupons não publicados")
+                    return publicados
                 if self.pub._sem_cota(canal, codigo):
                     self.pub.canais_bloqueados[codigo] = "cota diária da API do Instagram esgotada"
                     break

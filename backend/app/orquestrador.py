@@ -38,9 +38,11 @@ class Orquestrador:
                  monitor: ServicoMonitor | None = None, comissoes: ServicoComissoes | None = None,
                  inteligencia: ServicoInteligencia | None = None, cupons: ServicoCupons | None = None,
                  prazo_segundos: float = 360,
-                 cronometro=time.monotonic):
+                 cronometro=time.monotonic, ambiente=None):
         self.repo, self.integ, self.log = repo, integ, log
-        self.publicacao = publicacao or ServicoPublicacao(repo, integ.canais, log, url_supabase=url_supabase)
+        self.ambiente = ambiente
+        self.publicacao = publicacao or ServicoPublicacao(repo, integ.canais, log, url_supabase=url_supabase,
+                                                          fontes=integ.fontes)
         self.busca = busca or ServicoBusca(repo, integ.fontes, log)
         self.monitor = monitor or ServicoMonitor(repo, integ.fontes, log)
         self.comissoes = comissoes or ServicoComissoes(repo, integ.fontes, log)
@@ -49,11 +51,15 @@ class Orquestrador:
         self.prazo, self.cronometro = prazo_segundos, cronometro
 
     def sincronizar_modos(self) -> None:
-        """Deixa o banco com o mesmo modo (real/demo) das integrações em uso."""
+        """Deixa o banco com o mesmo modo (real/demo/desativado) das integrações em uso."""
         shopee_real = "shopee" in self.integ.fontes and self.integ.fontes["shopee"].modo == "real"
-        self.repo.definir_modo("marketplaces", "shopee", "real" if shopee_real else "demo")
+        producao = bool(self.ambiente and self.ambiente.producao)
+        self.repo.definir_modo("marketplaces", "shopee", "real" if shopee_real else ("desativado" if producao else "demo"))
         for codigo, canal in self.integ.canais.items():
             self.repo.definir_modo("canais", codigo, canal.modo)
+        if producao:  # canal sem integração ativa: desativado, nunca "demo" escondido em produção
+            for codigo in self.ambiente.canais_desativados:
+                self.repo.definir_modo("canais", codigo, "desativado")
 
     def executar(self, origem: str = "agendada", forcar_comissoes: bool = False) -> tuple[str, ResumoExecucao]:
         resumo = ResumoExecucao()
@@ -92,6 +98,8 @@ class Orquestrador:
 
         def carregar():
             cfg.update(self.repo.configuracoes())
+            if self.ambiente is not None:
+                cfg.update(self.ambiente.ajustar(cfg))
 
         def monitorar():
             resumo.verificadas = self.monitor.executar(cfg)
@@ -130,6 +138,16 @@ class Orquestrador:
         for nome, funcao in etapas:
             etapa(nome, funcao)
 
+        # ofertas que deveriam ter saído e não saíram (canal travado, cota, erro repetido): alerta crítico,
+        # que marca a rodada como falha e dispara o monitoramento externo (HEALTHCHECK_URL /fail)
+        try:
+            minutos = int(cfg.get("publicacao.alerta_fila_atrasada_min") or 120)
+            atrasadas = 0 if self.repo.parada_emergencia() else self.repo.fila_atrasada(minutos)
+            if atrasadas:
+                self.log.critico("publicacao", f"{atrasadas} oferta(s) na fila atrasadas há mais de {minutos} min sem publicar",
+                                 atrasadas=atrasadas)
+        except Exception as e:  # o alerta nunca derruba a rodada
+            self.log.aviso("publicacao", "Não consegui conferir a fila atrasada", erro=str(e))
         resumo.canais_bloqueados = dict(self.publicacao.canais_bloqueados)
         resumo.alertas_criticos = self.log.contagem.get("CRITICO", 0) - criticos_antes
         if not resumo.etapas_com_erro and not resumo.alertas_criticos:

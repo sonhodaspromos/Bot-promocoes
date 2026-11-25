@@ -168,7 +168,8 @@ def test_link_no_dominio_da_loja_mas_sem_atribuicao_e_recusado():
 
 
 def test_link_que_redireciona_para_a_pagina_inicial_perdeu_a_atribuicao():
-    sessao = SessaoFalsa().quando("GET", "AbC999", RespostaFalsa(200, url="https://shopee.com.br/"))
+    sessao = (SessaoFalsa().quando("GET", "AbC999", RespostaFalsa(302, headers={"Location": "https://shopee.com.br/"}))
+              .quando("GET", "shopee.com.br/", RespostaFalsa(200)))
     r = validar_link("https://s.shopee.com.br/AbC999", ["s.shopee.com.br"], cliente(sessao, tentativas=1))
     assert not r.valido and "página inicial" in r.motivo
 

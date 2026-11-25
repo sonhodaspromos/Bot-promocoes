@@ -276,13 +276,16 @@ class FonteComissoes(FonteOfertas):
         return [{"referencia_externa": "1-A-9", "id_externo": "9", "valor_comissao": 4.5, "data_venda": "2026-11-21", "status": "confirmada"}]
 
 
-def test_comissoes_so_na_janela_das_6h_ou_forcado():
+def test_comissoes_uma_vez_por_dia_depois_das_6h_ou_forcado():
+    # (auditoria complementar) antes: só numa janela de 20 min às 6h, que o cron atrasado podia perder
     repo = MemoriaRepositorio()
-    seis = datetime(2026, 11, 22, 9, 5, tzinfo=timezone.utc)  # 06:05 local
-    assert ServicoComissoes(repo, {"shopee": FonteComissoes()}, log(), relogio=lambda: TARDE).executar(repo.configuracoes()) == 0
+    cinco = datetime(2026, 11, 22, 8, 5, tzinfo=timezone.utc)  # 05:05 local
+    seis = datetime(2026, 11, 22, 9, 5, tzinfo=timezone.utc)   # 06:05 local
+    assert ServicoComissoes(repo, {"shopee": FonteComissoes()}, log(), relogio=lambda: cinco).executar(repo.configuracoes()) == 0
     assert ServicoComissoes(repo, {"shopee": FonteComissoes()}, log(), relogio=lambda: seis).executar(repo.configuracoes()) == 1
+    assert ServicoComissoes(repo, {"shopee": FonteComissoes()}, log(), relogio=lambda: TARDE).executar(repo.configuracoes()) == 0
     ServicoComissoes(repo, {"shopee": FonteComissoes()}, log()).executar(repo.configuracoes(), forcar=True)
-    assert len(repo.t["comissoes"]) == 1  # repetida ignorada
+    assert len(repo.t["comissoes"]) == 1  # a mesma comissão não duplica
 
 
 def test_comissoes_ignora_fonte_demo():

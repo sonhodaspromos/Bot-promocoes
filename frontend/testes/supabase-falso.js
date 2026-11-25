@@ -3,10 +3,17 @@
 const params = new URLSearchParams(location.search);
 const PAPEL = params.get("papel") || "dono";
 const LOGADO = params.get("logado") !== "0";
+const AAL = params.get("aal") || "aal2";          // aal1 = entrou só com senha (falta o 2º fator)
+const FATOR = params.get("fator") || "verificado"; // verificado | nenhum
+let aalAtual = AAL;
 const agora = new Date().toISOString();
 const hoje = new Date().toLocaleDateString("sv-SE");
 
 window.__chamadas = [];
+function cfg(chave, valor) {
+  const c = DADOS.configuracoes.find((x) => x.chave === chave);
+  if (c) c.valor = valor; else DADOS.configuracoes.push({ chave, valor, tipo: "texto", descricao: chave });
+}
 
 const DADOS = {
   configuracoes: [
@@ -15,12 +22,17 @@ const DADOS = {
     { chave: "filtros.desconto_minimo", valor: 20, tipo: "numero", descricao: "Desconto mínimo (%)", minimo: 0, maximo: 95 },
     { chave: "monitor.ativo", valor: true, tipo: "booleano", descricao: "Pausar ofertas quando o preço sobe ou o produto esgota" },
     { chave: "transparencia.aviso_afiliado", valor: "Link de afiliado: posso ganhar comissão.", tipo: "texto", descricao: "Aviso de comissão" },
+    { chave: "sistema.parada_emergencia", valor: false, tipo: "booleano", descricao: "Parada de emergência (use o botão no topo)" },
+    { chave: "auth.exigir_mfa", valor: true, tipo: "booleano", descricao: "Exigir 2º fator" },
     { chave: "visual.nome_perfil", valor: "Sonho das Promos", tipo: "texto", descricao: "Nome no topo das artes" },
     { chave: "visual.cor_principal", valor: "#EE4D2D", tipo: "texto", descricao: "Cor principal" },
   ],
   categorias: [
     { id: 1, nome: "Eletrônicos", slug: "eletronicos", palavras_chave: ["fone bluetooth", "smartwatch"], ativa: true, ordem: 1 },
     { id: 2, nome: "Casa", slug: "casa", palavras_chave: ["air fryer"], ativa: false, ordem: 2 },
+  ],
+  convites: [
+    { email: "editora@teste.com", papel: "editor", expira_em: agora, usado_em: null, criado_em: agora },
   ],
   marketplaces: [
     { id: 1, codigo: "shopee", nome: "Shopee", modo: "demo", ativo: true, dominios_afiliado: ["s.shopee.com.br", "shope.ee"] },
@@ -82,10 +94,13 @@ function construtor(tabela) {
     single() { estado.unico = true; return api; },
     then(ok, falha) {
       window.__chamadas.push({ tabela, operacao: estado.operacao, corpo: estado.corpo, filtros: estado.filtros });
+      if (tabela === "marketplaces" && estado.operacao === "update" && PAPEL !== "dono")
+        return Promise.resolve({ data: null, error: { code: "P0027", message: "Só o dono altera domínios e identificadores de afiliado (protege as suas comissões)." } }).then(ok, falha);
       if (PAPEL === "leitor" && estado.operacao !== "select") return Promise.resolve({ data: null, error: { code: "42501", message: "denied" } }).then(ok, falha);
       let dados = DADOS[tabela] || [];
       for (const [op, campo, valor] of estado.filtros) {
         if (op === "eq") dados = dados.filter((d) => d[campo] === undefined || String(d[campo]) === String(valor));
+        if (op === "in") dados = dados.filter((d) => d[campo] === undefined || valor.includes(d[campo]));
       }
       const resposta = estado.contar ? { data: null, count: CONTAGENS[tabela] ?? dados.length, error: null }
         : { data: estado.unico ? (dados[0] || null) : dados, error: null };
@@ -106,11 +121,28 @@ export function createClient() {
       signInWithPassword: async () => ({ error: { message: "Invalid login credentials" } }),
       signUp: async () => ({ data: { session: null }, error: null }),
       signOut: async () => ({}),
+      refreshSession: async () => ({ data: {}, error: null }),
+      mfa: {
+        listFactors: async () => ({ data: { totp: FATOR === "verificado" ? [{ id: "f1", status: "verified" }] : [] } }),
+        unenroll: async () => ({ error: null }),
+        enroll: async () => { window.__chamadas.push({ mfa: "enroll" }); return { data: { id: "f2", totp: { qr_code: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E", secret: "JBSWY3DPEHPK3PXP" } }, error: null }; },
+        challengeAndVerify: async ({ code }) => {
+          window.__chamadas.push({ mfa: "verify", code });
+          if (code !== "123456") return { error: { message: "Invalid TOTP code" } };
+          aalAtual = "aal2"; return { error: null };
+        },
+      },
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
     },
     rpc: async (nome, args) => {
       window.__chamadas.push({ rpc: nome, args });
       if (nome === "meu_papel") return { data: PAPEL === "nenhum" ? null : PAPEL, error: null };
+      if (nome === "minha_sessao") return { data: [{ papel: PAPEL === "nenhum" || aalAtual !== "aal2" ? null : PAPEL, aal: aalAtual, mfa_exigido: true }], error: null };
+      if (nome === "ativar_parada_emergencia") { cfg("sistema.parada_emergencia", true); cfg("sistema.parada_motivo", args.p_motivo); return { data: null, error: null }; }
+      if (nome === "desativar_parada_emergencia") {
+        if (PAPEL !== "dono") return { data: null, error: { code: "42501", message: "só o dono" } };
+        cfg("sistema.parada_emergencia", false); return { data: null, error: null };
+      }
       if (nome === "cadastrar_oferta_manual" && !/mercadolivre\.com\//.test(args.p_link))
         return { data: null, error: { code: "P0011", message: "Esse link não é um link de afiliado de Mercado Livre (domínios aceitos: mercadolivre.com)." } };
       return { data: 99, error: null };

@@ -13,12 +13,13 @@ const CREDENCIAIS = [
 ];
 
 export async function montar(el, ctx) {
-  const [configs, categorias, mkts, canais, creds] = await Promise.all([
+  const [configs, categorias, mkts, canais, creds, convites] = await Promise.all([
     q(ctx.sb.from("configuracoes").select("*").order("chave")),
     q(ctx.sb.from("categorias").select("*").order("ordem")),
     q(ctx.sb.from("marketplaces").select("*").order("nome")),
     q(ctx.sb.from("canais").select("*").order("id")),
     ctx.ehDono ? q(ctx.sb.from("credenciais_integracoes").select("integracao,nome,dica,expira_em,ultimo_uso_em,atualizado_em")) : Promise.resolve([]),
+    ctx.ehDono ? q(ctx.sb.from("convites").select("*").order("criado_em", { ascending: false })) : Promise.resolve([]),
   ]);
   const ro = ctx.podeEditar ? "" : "disabled";
   const porGrupo = {};
@@ -28,7 +29,7 @@ export async function montar(el, ctx) {
     <h2>Ajustes</h2>
     ${ctx.podeEditar ? "" : '<p class="muted">Você está como <b>leitor</b>: pode ver, mas não alterar.</p>'}
     <form id="form-cfg">
-      ${Object.entries(porGrupo).map(([g, itens]) => `<h3>${esc(GRUPOS[g] || g)}</h3><div class="card">${itens.map((c) => campo(c, ro)).join("")}</div>`).join("")}
+      ${Object.entries(porGrupo).map(([g, itens]) => `<h3>${esc(GRUPOS[g] || g)}</h3><div class="card">${itens.map((c) => campo(c, travada(c.chave, ctx) ? "disabled" : ro)).join("")}</div>`).join("")}
       ${ctx.podeEditar ? '<p></p><button class="b p grande" type="submit">Salvar ajustes</button>' : ""}
     </form>
 
@@ -41,7 +42,8 @@ export async function montar(el, ctx) {
       <p class="muted" style="margin-top:0">O modo é definido pelo bot: <b>real</b> quando as credenciais estão configuradas, <b>demo</b> quando não estão.</p>
       ${mkts.map((m) => `<div class="sw"><div><b>${esc(m.nome)}</b> <span class="tag ${m.modo === "real" ? "st-publicada" : m.modo === "demo" ? "st-demo" : "st-aprovada"}">${esc(m.modo)}</span>
         <label for="dom-${m.id}">Domínios de afiliado (separados por vírgula)</label>
-        <input id="dom-${m.id}" data-mkt="${m.id}" value="${esc((m.dominios_afiliado || []).join(", "))}" ${ro || (m.codigo === "demo" ? "disabled" : "")}></div></div>`).join("")}
+        <input id="dom-${m.id}" data-mkt="${m.id}" value="${esc((m.dominios_afiliado || []).join(", "))}" ${ctx.ehDono && m.codigo !== "demo" ? "" : "disabled"}></div></div>`).join("")}
+      ${ctx.ehDono ? "" : '<p class="muted">Domínios e identificadores de afiliado: só o dono altera.</p>'}
       ${canais.map((c) => `<div class="sw"><div><b>${esc(c.nome)}</b> <span class="tag ${c.modo === "real" ? "st-publicada" : "st-demo"}">${esc(c.modo)}</span>
         <div class="muted">limite por dia: ${c.limite_diario ?? "sem limite"}</div></div>
         <label class="tg" title="Ativo"><input type="checkbox" data-canal="${c.id}" ${c.ativo ? "checked" : ""} ${ro}><span></span></label></div>`).join("")}
@@ -61,7 +63,30 @@ export async function montar(el, ctx) {
             <div><button class="b" type="button" data-salvar-cred="${i}.${n}">Salvar</button>
             ${atual ? `<button class="b erro" type="button" data-remover-cred="${i}.${n}">Remover</button>` : ""}</div></div></div></div>`;
       }).join("")}
+    </div>
+
+    <h3>Convites (cadastro fechado)</h3>
+    <div class="card" id="convites">
+      <p class="muted" style="margin-top:0">Só e-mails convidados conseguem criar conta. O convite vale 7 dias.</p>
+      <div class="linha"><input id="cv-email" type="email" placeholder="email@exemplo.com" aria-label="E-mail do convidado">
+        <select id="cv-papel" aria-label="Papel"><option value="leitor">leitor</option><option value="editor">editor</option></select>
+        <button class="b" id="cv-criar" type="button">Convidar</button></div>
+      <div id="cv-lista">${convites.map((c) => `<div class="sw" id="cv-${esc(c.email)}"><div><b>${esc(c.email)}</b> · ${esc(c.papel)}
+        <div class="muted">${c.usado_em ? "usado em " + dataHora(c.usado_em) : "vale até " + dataHora(c.expira_em)}</div></div>
+        ${c.usado_em ? "" : `<button class="b erro" type="button" data-cancelar-convite="${esc(c.email)}">Cancelar</button>`}</div>`).join("") || '<p class="muted">Nenhum convite.</p>'}</div>
     </div>` : ""}`;
+
+  // ---- convites (dono)
+  $("#cv-criar", el)?.addEventListener("click", async () => {
+    const email = $("#cv-email", el).value.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return aviso("Digite um e-mail válido.", "erro");
+    try { await q(ctx.sb.from("convites").insert({ email, papel: $("#cv-papel", el).value })); aviso("Convite criado ✔"); montar(el, ctx); }
+    catch (e) { aviso(e.message, "erro"); }
+  });
+  $$("[data-cancelar-convite]", el).forEach((b) => b.addEventListener("click", async () => {
+    try { await q(ctx.sb.from("convites").delete().eq("email", b.dataset.cancelarConvite)); montar(el, ctx); }
+    catch (e) { aviso(e.message, "erro"); }
+  }));
 
   // ---- configurações
   $("#form-cfg", el)?.addEventListener("submit", async (ev) => {
@@ -69,7 +94,7 @@ export async function montar(el, ctx) {
     const mudancas = [];
     for (const c of configs) {
       const input = el.querySelector(`[data-chave="${CSS.escape(c.chave)}"]`);
-      if (!input) continue;
+      if (!input || input.disabled) continue;
       let valor;
       if (c.tipo === "booleano") valor = input.checked;
       else if (c.tipo === "numero") {
@@ -145,6 +170,12 @@ export async function montar(el, ctx) {
     try { await q(ctx.sb.rpc("remover_credencial", { p_integracao: integracao, p_nome: nome })); montar(el, ctx); }
     catch (e) { aviso(e.message, "erro"); }
   }));
+}
+
+/** sistema.* muda só por RPC (botão de emergência / SQL); auth.* e o #publi só o dono altera. */
+function travada(chave, ctx) {
+  if (chave.startsWith("sistema.ambiente") || chave.startsWith("sistema.parada") || chave === "auth.email_dono") return true;
+  return !ctx.ehDono && (chave.startsWith("auth.") || chave === "transparencia.marcar_publi");
 }
 
 function campo(c, ro) {

@@ -15,7 +15,7 @@ Recuperação de falhas (auditoria):
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from ..cliente_http import ClienteHTTP
 from ..erros import ErroBanco, ErroIntegracao, RegraViolada
@@ -25,6 +25,7 @@ from ..modelos import ConteudoPublicacao, ItemFila, ResultadoValidacao
 from ..repositorio import Repositorio
 from . import arte, textos
 from .cupons import melhor_cupom
+from ..rede import ImagemRecusada, baixar_imagem
 from .comum import agora_utc, ajuste, dentro_do_horario, fuso, inicio_do_dia, num
 from .validacao import LinkTemporariamenteIndisponivel, validar_link
 
@@ -33,8 +34,9 @@ CANAIS_POR_OFERTA = ("telegram", "instagram_story")  # o feed recebe só a ofert
 
 class ServicoPublicacao:
     def __init__(self, repo: Repositorio, canais: dict[str, CanalPublicacao], log: Log, *,
-                 url_supabase: str, http: ClienteHTTP | None = None, relogio=agora_utc):
+                 url_supabase: str, http: ClienteHTTP | None = None, relogio=agora_utc, fontes: dict | None = None):
         self.repo, self.canais, self.log = repo, canais, log
+        self.fontes = fontes or {}  # para reconferir o preço na loja imediatamente antes de publicar
         self.url_cliques = url_supabase.rstrip("/") + "/functions/v1/r"
         self.http = http or ClienteHTTP("validacao", tentativas=2)
         self.relogio = relogio
@@ -47,7 +49,10 @@ class ServicoPublicacao:
         for p in self.repo.links_pendentes(limite):
             try:
                 r = validar_link(p["url"], p["dominios"], self.http, demo=p["demo"], padrao=p.get("padrao"),
-                                 verificar_http=bool(ajuste(cfg, "monitor.verificar_links")))
+                                 verificar_http=bool(ajuste(cfg, "monitor.verificar_links")),
+                                 dominios_destino=p.get("dominios_destino"), parametros_afiliado=p.get("parametros_afiliado"),
+                                 id_afiliado=p.get("id_afiliado"),
+                                 exigir_atribuicao=bool(cfg.get("links.exigir_atribuicao")) and not p["demo"])
             except LinkTemporariamenteIndisponivel as e:
                 self.log.aviso("validacao", "Link não pôde ser verificado agora; tento na próxima rodada", erro=str(e))
                 continue
@@ -137,6 +142,7 @@ class ServicoPublicacao:
     def processar_fila(self, cfg: dict, limite: int = 10) -> tuple[int, int]:
         canais_por_id = {c["id"]: c for c in self.repo.canais()}
         ok = falhas = 0
+        self._cfg = cfg
         fotos: dict[int, bytes | None] = {}
         itens = self.repo.pegar_fila(limite)
         for n, item in enumerate(itens):
@@ -145,6 +151,9 @@ class ServicoPublicacao:
             canal = self.canais.get(codigo)
             if codigo in self.canais_bloqueados:
                 self._devolver(item, 60, f"canal pausado nesta rodada: {self.canais_bloqueados[codigo]}")
+                continue
+            if canal is not None and canal.modo == "real" and self.parada_ativa():
+                self._devolver(item, 30, "parada de emergência ligada: nenhuma publicação real")
                 continue
             try:
                 resultado = self._publicar_item(item, canal, codigo, cfg, fotos)
@@ -163,9 +172,18 @@ class ServicoPublicacao:
     def _publicar_item(self, item: ItemFila, canal, codigo: str, cfg: dict, fotos: dict) -> bool:
         """Publica um item. True = publicado. Lança ErroBanco se o banco cair (o chamador interrompe)."""
         dados = self.repo.dados_publicacao(item.promocao_id)
+        if dados and dados.get("classificacao") is None and dados.get("status") in ("aprovada", "publicada"):
+            self._devolver(item, 15, "aguardando nova análise (preço, estoque ou link mudou)")
+            return False
         erro = self._checar(item, dados, canal)
         if erro:
             return self._registrar_falha(item, codigo, erro)
+        if canal.modo == "real":
+            motivo = self._preco_mudou(dados, cfg)
+            if motivo:
+                self.log.aviso("publicacao", f"{codigo}: não publicado — {motivo}", promocao_id=item.promocao_id)
+                self._devolver(item, 15, motivo)
+                return False
         try:
             conteudo = self._montar(item, dados, canal, cfg, fotos)
         except Exception as e:  # arte/legenda com problema: falha registrada, nada foi enviado
@@ -189,6 +207,41 @@ class ServicoPublicacao:
         self.log.info("publicacao", f"{canal.codigo}: publicado ({'DEMO' if canal.modo != 'real' else 'real'})",
                       promocao_id=item.promocao_id, mensagem=id_msg)
         return True
+
+    def parada_ativa(self) -> bool:
+        """Lida do banco na hora (não do cache da rodada): o botão de emergência vale no envio seguinte."""
+        try:
+            return bool(self.repo.parada_emergencia())
+        except ErroBanco:
+            return True  # sem conseguir confirmar, não publica de verdade
+
+    def _preco_mudou(self, dados: dict, cfg: dict) -> str | None:
+        """Reconfere preço e estoque na loja imediatamente antes de publicar. Devolve o motivo para NÃO publicar."""
+        prod = self.repo.produto(dados["produto_id"]) if dados.get("produto_id") else None
+        if not prod:
+            return "produto não encontrado para reconferir o preço"
+        fonte = self.fontes.get(prod["marketplace"])
+        preco_post = float(dados["preco_promocional"])
+        if fonte is not None and getattr(fonte, "suporta_consulta", False) and fonte.modo == "real":
+            try:
+                atual = fonte.consultar(prod["id_externo"])
+            except (ErroIntegracao, ValueError) as e:
+                return f"não consegui reconferir o preço na loja ({e})"
+            if atual is None or not atual.disponivel:
+                self.repo.atualizar_produto(prod["id"], preco_post, False, None)
+                return "produto indisponível na loja no momento da publicação"
+            if abs(atual.preco - preco_post) > max(0.01, preco_post * 0.005):
+                self.repo.atualizar_produto(prod["id"], atual.preco, True, atual.preco_original)
+                return f"preço mudou na loja ({preco_post:.2f} → {atual.preco:.2f}): nova análise antes de publicar"
+            return None
+        # loja sem consulta (ex.: Mercado Livre manual): o preço precisa ter sido conferido recentemente
+        horas = float(cfg.get("publicacao.validade_preco_horas") or 24)
+        conferido = prod.get("verificado_em")
+        if isinstance(conferido, str):
+            conferido = datetime.fromisoformat(conferido.replace("Z", "+00:00"))
+        if not conferido or self.relogio() - conferido > timedelta(hours=horas):
+            return f"preço sem conferência há mais de {horas:.0f} h: confirme o preço no painel"
+        return None
 
     def _sem_cota(self, canal, codigo) -> bool:
         consultar = getattr(canal, "cota_restante", None)
@@ -274,8 +327,9 @@ class ServicoPublicacao:
             return None
         if url not in cache:
             try:
-                cache[url] = self.http.get(url).content
-            except ErroIntegracao:
+                cache[url] = baixar_imagem(self.http, url)   # https, IP público, ≤ 5 MB, JPEG/PNG/WEBP, ≤ 15 s
+            except ImagemRecusada as e:
+                self.log.aviso("publicacao", "Imagem do produto recusada; uso a arte padrão", motivo=str(e))
                 cache[url] = None
         return cache[url]
 
@@ -288,6 +342,7 @@ class ServicoPublicacao:
             achado = None  # sem a tabela de cupons (migration 016 ausente): publica sem cupom
         if achado and (not achado[0].demo or dados.get("demo")):
             dados["cupom_codigo"], dados["preco_com_cupom"] = achado[0].codigo, achado[1]
+        aplicar_desconto_da_analise(dados)
         foto = arte.abrir_foto(self._foto(dados.get("imagem_url"), cache))
         link = f"{self.url_cliques}?l={item.link_afiliado_id}&c={canal.codigo}"
         if canal.codigo.startswith("instagram"):
@@ -316,3 +371,22 @@ class ServicoPublicacao:
             except ErroIntegracao as e:
                 self.log.aviso("publicacao", "Não consegui marcar a oferta como encerrada", erro=str(e))
         return n
+
+
+def aplicar_desconto_da_analise(dados: dict) -> None:
+    """O post usa o desconto que a ANÁLISE comprovou, nunca o "preço de" bruto da loja.
+    Ex.: loja diz "de R$ 300", mas o maior preço visto foi R$ 82 → o post mostra o desconto sobre R$ 82
+    (ou nenhum, se não houver comprovação)."""
+    analise = dados.get("analise")
+    if analise is None:
+        return  # sem análise (só acontece em testes antigos/simulação): mantém os dados como estão
+    comprovado = bool(analise.get("desconto_comprovado"))
+    real = analise.get("desconto_real")
+    base = str(analise.get("base_desconto") or "")
+    if "cupom" in base:  # desconto vindo do cupom: a linha do cupom já mostra o preço final
+        comprovado = False
+    dados["desconto_comprovado"] = comprovado
+    preco = float(dados.get("preco_promocional") or 0)
+    if comprovado and real and 0 < float(real) < 100 and preco > 0:
+        dados["desconto_pct"] = round(float(real), 0)
+        dados["preco_referencia"] = round(preco / (1 - float(real) / 100), 2)

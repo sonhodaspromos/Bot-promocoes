@@ -42,15 +42,18 @@ class MemoriaRepositorio(Repositorio):
         self._ids = itertools.count(1)
         self.config = dict(CONFIG_PADRAO)
         self.t = {k: [] for k in ("marketplaces", "canais", "categorias", "produtos", "promocoes", "links",
-                                  "fila", "historico", "comissoes", "execucoes", "logs", "precos", "cupons", "cupons_produtos", "cupons_pub")}
+                                  "fila", "historico", "comissoes", "execucoes", "logs", "precos", "cupons", "cupons_produtos", "cupons_pub",
+                                  "comissoes_importacoes")}
         self.cofre: dict[tuple[str, str], str] = {}
         self.relogio = agora  # os testes trocam para simular a passagem do tempo
         for codigo, nome, doms, modo, padrao in [
                 ("shopee", "Shopee", ["s.shopee.com.br", "shope.ee"], "demo", r"^https://(s\.shopee\.com\.br|shope\.ee)/[A-Za-z0-9_-]+"),
                 ("mercado_livre", "Mercado Livre", ["mercadolivre.com"], "manual", r"^https://mercadolivre\.com/sec/[A-Za-z0-9]+"),
                 ("demo", "Loja de Demonstração", ["demo.invalid"], "demo", r"^https://demo\.invalid/")]:
+            destino = {"shopee": ["shopee.com.br"], "mercado_livre": ["mercadolivre.com.br", "mercadolivre.com"]}.get(codigo, [])
             self.t["marketplaces"].append({"id": self._id(), "codigo": codigo, "nome": nome, "padrao_afiliado": padrao,
-                                           "dominios_afiliado": doms, "modo": modo, "ativo": True})
+                                           "dominios_afiliado": doms, "modo": modo, "ativo": True, "dominios_destino": destino,
+                                           "parametros_afiliado": [], "id_afiliado": None})
         for codigo, tipo, limite in [("telegram", "telegram", 200), ("instagram_story", "instagram_story", 45),
                                      ("instagram_feed", "instagram_feed", 1)]:
             self.t["canais"].append({"id": self._id(), "codigo": codigo, "tipo": tipo, "nome": codigo,
@@ -84,13 +87,15 @@ class MemoriaRepositorio(Repositorio):
         p = self._um("produtos", marketplace_id=marketplace_id, id_externo=oferta.id_externo)
         if p:
             self.atualizar_produto(p["id"], oferta.preco, oferta.disponivel, oferta.preco_original)
-            p.update(titulo=oferta.titulo, imagem_url=oferta.imagem_url)
+            p.update(titulo=oferta.titulo, imagem_url=oferta.imagem_url, preco_maximo_variacao=oferta.preco_maximo,
+                     referencia_derivada=oferta.referencia_derivada)
             return p["id"], False
         p = {"id": self._id(), "marketplace_id": marketplace_id, "id_externo": oferta.id_externo,
              "categoria_id": categoria_id, "titulo": oferta.titulo, "preco_atual": oferta.preco,
              "preco_original": oferta.preco_original, "imagem_url": oferta.imagem_url, "disponivel": oferta.disponivel,
              "demo": oferta.demo or mkt["modo"] == "demo", "verificado_em": self.relogio(),
-             "nota": oferta.nota, "total_vendas": oferta.total_vendas}
+             "nota": oferta.nota, "total_vendas": oferta.total_vendas,
+             "preco_maximo_variacao": oferta.preco_maximo, "referencia_derivada": oferta.referencia_derivada}
         self.t["produtos"].append(p)
         self._registrar_preco(p)
         return p["id"], True
@@ -153,7 +158,8 @@ class MemoriaRepositorio(Repositorio):
             saida.append({"link_id": l["id"], "url": l["url"], "produto_id": l["produto_id"],
                           "demo": self._um("produtos", id=l["produto_id"])["demo"],
                           "marketplace": mkt["codigo"], "dominios": mkt["dominios_afiliado"],
-                          "padrao": mkt.get("padrao_afiliado")})
+                          "padrao": mkt.get("padrao_afiliado"), "dominios_destino": mkt.get("dominios_destino"),
+                          "parametros_afiliado": mkt.get("parametros_afiliado") or [], "id_afiliado": mkt.get("id_afiliado")})
         return saida[:limite]
 
     def registrar_validacao(self, link_id, resultado):
@@ -182,7 +188,7 @@ class MemoriaRepositorio(Repositorio):
                 "desconto_pct": pr["desconto_pct"], "marketplace": mkt["codigo"], "marketplace_nome": mkt["nome"],
                 "link_id": link["id"] if link else None, "link_validado": bool(link), "demo": pr["demo"],
                 "origem": pr["origem"], "publicada_em": pr["publicada_em"], "produto_id": prod["id"],
-                "pontuacao": pr.get("pontuacao"), "classificacao": pr.get("classificacao")}
+                "pontuacao": pr.get("pontuacao"), "classificacao": pr.get("classificacao"), "analise": pr.get("analise")}
 
     def promocoes_para_enfileirar(self, limite):
         na_fila = {f["promocao_id"] for f in self.t["fila"] if f["status"] in ("pendente", "processando")}
@@ -228,6 +234,22 @@ class MemoriaRepositorio(Repositorio):
             f.update(status="processando", tentativas=f["tentativas"] + 1, publicando_desde=None,
                      bloqueado_ate=agora_ + timedelta(minutes=10))
         return [ItemFila(f["id"], f["promocao_id"], f["canal_id"], f["link_afiliado_id"], f["tentativas"]) for f in itens]
+
+    def fila_atrasada(self, minutos):
+        from datetime import timedelta
+        limite = self.relogio() - timedelta(minutes=minutos)
+        return sum(1 for f in self.t["fila"] if f["status"] == "pendente" and f.get("agendado_para", self.relogio()) < limite)
+
+    def parada_emergencia(self):
+        return bool(self.config.get("sistema.parada_emergencia"))
+
+    def produto(self, produto_id):
+        p = self._um("produtos", id=produto_id)
+        if not p:
+            return None
+        mkt = self._um("marketplaces", id=p["marketplace_id"])
+        return {"id": p["id"], "id_externo": p["id_externo"], "marketplace": mkt["codigo"], "preco_atual": p["preco_atual"],
+                "disponivel": p["disponivel"], "verificado_em": p.get("verificado_em")}
 
     def marcar_publicando(self, fila_id):
         f = self._um("fila", id=fila_id)
@@ -300,6 +322,7 @@ class MemoriaRepositorio(Repositorio):
                 "comissao_pct": pr.get("comissao_pct"), "titulo": prod["titulo"], "preco_produto": prod["preco_atual"],
                 "disponivel": prod["disponivel"], "nota": prod.get("nota"), "total_vendas": prod.get("total_vendas"),
                 "imagem_url": prod.get("imagem_url"), "categoria_ativa": cat["ativa"] if cat else None,
+                "preco_maximo_variacao": prod.get("preco_maximo_variacao"), "referencia_derivada": bool(prod.get("referencia_derivada")),
                 "marketplace": mkt["codigo"], "marketplace_modo": mkt["modo"], "link": links[0] if links else None})
         return saida[:limite]
 
@@ -393,11 +416,31 @@ class MemoriaRepositorio(Repositorio):
 
     # ---------------------------------------------------------------- comissões, execução, logs
     def salvar_comissoes(self, marketplace_id, itens):
-        refs = {(c["marketplace_id"], c.get("referencia_externa")) for c in self.t["comissoes"]}
-        novos = [dict(i, marketplace_id=marketplace_id, origem="api") for i in itens
-                 if (marketplace_id, i.get("referencia_externa")) not in refs]
-        self.t["comissoes"] += novos
-        return len(itens)
+        r = {"novos": 0, "atualizados": 0, "ignorados": 0}
+        for i in {i["referencia_externa"]: i for i in itens if i.get("referencia_externa")}.values():
+            antes = self._um("comissoes", marketplace_id=marketplace_id, referencia_externa=i["referencia_externa"])
+            if antes and antes["status"] == "paga":
+                r["ignorados"] += 1
+            elif antes:
+                if antes["status"] != i.get("status") or antes["valor_comissao"] != i["valor_comissao"]:
+                    r["atualizados"] += 1
+                antes.update({k: v for k, v in i.items()})
+            else:
+                self.t["comissoes"].append(dict(i, marketplace_id=marketplace_id, origem="api"))
+                r["novos"] += 1
+        return r
+
+    def comissoes_api_periodo(self, marketplace_id, inicio, fim):
+        return [c for c in self.t["comissoes"] if c["marketplace_id"] == marketplace_id and c.get("origem") == "api"
+                and inicio <= c["data_venda"] <= fim]
+
+    def registrar_importacao(self, dados):
+        self.t["comissoes_importacoes"].append(dict(dados, criado_em=self.relogio()))
+
+    def ultima_importacao(self, marketplace_id, tipo):
+        datas = [i["criado_em"] for i in self.t["comissoes_importacoes"]
+                 if i["marketplace_id"] == marketplace_id and i["tipo"] == tipo and i["status"] != "erro"]
+        return max(datas) if datas else None
 
     def iniciar_execucao(self, origem, modo, versao):
         e = {"id": str(uuid.uuid4()), "origem": origem, "modo": modo, "versao": versao, "status": "rodando",

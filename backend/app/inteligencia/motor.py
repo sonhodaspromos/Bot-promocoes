@@ -63,6 +63,9 @@ class EntradaAnalise:
     link_motivo: str | None = None
     duplicada: str | None = None              # motivo, se já existe oferta igual
     demo: bool = False
+    preco_maximo_variacao: float | None = None  # maior preço entre as variações do produto
+    referencia_derivada: bool = False           # "preço de" calculado de uma taxa (não foi visto)
+    desconto_por_cupom: bool = False            # o desconto vem de um cupom aprovado (regras conhecidas)
 
 
 @dataclass
@@ -91,6 +94,7 @@ class ResultadoAnalise:
     motivos: list[str]
     pontuacao_sem_bloqueio: int
     analisado_em: str
+    desconto_comprovado: bool = False
 
     @property
     def rotulo(self) -> str:
@@ -152,9 +156,17 @@ def analisar(e: EntradaAnalise, regras: Regras | None = None, agora: datetime | 
         alertas.append("Link de afiliado ainda não validado: a oferta só é publicada depois da validação")
     if e.duplicada:
         bloqueios.append(f"Oferta duplicada: {e.duplicada}")
+    if e.preco and e.preco > 0 and e.preco_maximo_variacao and \
+            e.preco_maximo_variacao > e.preco * (1 + r.variacao_preco_max_pct / 100):
+        bloqueios.append(f"Preço diferente entre as variações do produto ({_reais(e.preco)} a "
+                         f"{_reais(e.preco_maximo_variacao)}): o post mostraria um preço que nem todas as opções têm")
 
     # ------------------------------------------------ 3. desconto real
     comp_desc, desconto_real, base = _desconto(e, r, agora, bloqueios, alertas, motivos)
+    comprovado = desconto_real is not None and (comp_desc.confiabilidade >= 0.9 or e.desconto_por_cupom)
+    if desconto_real is not None and r.exigir_desconto_comprovado and not comprovado:
+        bloqueios.append(f"Desconto não comprovado ({base}): só divulgamos desconto confirmado pelo histórico de "
+                         "preços que o próprio bot registrou ou por cupom aprovado")
 
     componentes = [
         comp_desc,
@@ -199,7 +211,7 @@ def analisar(e: EntradaAnalise, regras: Regras | None = None, agora: datetime | 
         pontuacao=pontuacao, classificacao=classificacao, confianca=max(0, min(100, confianca)),
         desconto_real=round(desconto_real, 2) if desconto_real is not None else None, base_desconto=base,
         componentes=componentes, bloqueios=bloqueios, alertas=alertas, motivos=motivos,
-        pontuacao_sem_bloqueio=pontuacao_sem_bloqueio, analisado_em=agora.isoformat())
+        pontuacao_sem_bloqueio=pontuacao_sem_bloqueio, analisado_em=agora.isoformat(), desconto_comprovado=comprovado)
 
 
 # =========================================================================== quesitos
@@ -231,12 +243,19 @@ def _desconto(e, r, agora, bloqueios, alertas, motivos):
     elif ref:
         desconto = (ref - e.preco) / ref * 100
         conf = 0.7 if e.origem_referencia == "loja" else 0.5
+        if e.desconto_por_cupom:
+            conf, base = 1.0, "desconto do cupom aprovado sobre o preço atual da loja"
         base = "preço informado pela loja" if e.origem_referencia == "loja" else "preço anterior informado no cadastro"
         alertas.append(f"Histórico de preço insuficiente ({len(precos)} registro(s)): desconto não confirmado")
     elif suficiente:
         tipico = statistics.median(precos)
         desconto, conf = max((tipico - e.preco) / tipico * 100, 0.0), 0.9
         base = f"mediana de {len(precos)} preços registrados ({_reais(tipico)})"
+
+    if ref and e.referencia_derivada and conf >= 0.9 and not e.desconto_por_cupom \
+            and not (suficiente and cobertura >= r.historico_cobertura_dias):
+        conf = 0.7  # "preço de" calculado de uma taxa: só conta como comprovado com histórico longo
+        base += " (preço de calculado pela taxa de desconto da loja)"
 
     if desconto is None:
         bloqueios.append("Sem preço de referência confiável: não dá para calcular o desconto "

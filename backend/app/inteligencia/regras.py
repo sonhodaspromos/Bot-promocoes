@@ -36,6 +36,8 @@ class Regras:
     exigir_imagem: bool = False
     janela_repeticao_horas: float = 24.0
     tolerancia_preco_produto_pct: float = 1.0   # diferença aceita entre preço da oferta e do produto
+    exigir_desconto_comprovado: bool = False     # produção: só desconto confirmado por histórico próprio ou cupom
+    variacao_preco_max_pct: float = 5.0          # diferença máxima aceita entre o menor e o maior preço das variações
 
     @property
     def pesos(self) -> dict[str, float]:
@@ -69,6 +71,8 @@ class Regras:
             faixa_preco_max=_num(cfg, p + "faixa_preco_max", 1500),
             exigir_imagem=bool(exigir) if exigir is not None else False,
             janela_repeticao_horas=_num(cfg, p + "janela_repeticao_horas", 24),
+            exigir_desconto_comprovado=bool(cfg.get(p + "exigir_desconto_comprovado") or False),
+            variacao_preco_max_pct=_num(cfg, p + "variacao_preco_max_pct", 5),
         )
         r.validar()
         return r

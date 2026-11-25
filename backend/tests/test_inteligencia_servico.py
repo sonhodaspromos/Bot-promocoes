@@ -36,9 +36,7 @@ def http_imagens(mapa):
 
 
 def _resp_bin(conteudo):
-    r = RespostaFalsa(200, texto="")
-    r.content = conteudo
-    return r
+    return RespostaFalsa(200, conteudo=conteudo, headers={"Content-Type": "image/png"})
 
 
 def oferta(id_externo="1", titulo="Fone de Ouvido Bluetooth com Estojo de Carga", preco=60.0, original=120.0, **kw):

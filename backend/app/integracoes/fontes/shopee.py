@@ -68,13 +68,16 @@ class ShopeeFonte(FonteOfertas):
         if not preco or not link or not n.get("itemId"):
             return None
         desconto = _num(n.get("priceDiscountRate")) or 0
+        # a API não informa o "preço de": ele é DERIVADO da taxa de desconto (não comprovado)
         original = round(preco / (1 - desconto / 100), 2) if 0 < desconto < 100 else None
+        maximo = _num(n.get("priceMax"))
         comissao = _num(n.get("commissionRate"))
         return OfertaEncontrada(
             marketplace=self.codigo, id_externo=str(n["itemId"]), titulo=str(n.get("productName") or "")[:300],
             preco=preco, preco_original=original, nota=_num(n.get("ratingStar")),
             total_vendas=int(_num(n.get("sales")) or 0) or None, imagem_url=n.get("imageUrl") or None,
             url_produto=n.get("productLink") or None, link_afiliado=link,
+            preco_maximo=maximo if maximo and maximo > preco else None, referencia_derivada=original is not None,
             comissao_pct=round(comissao * 100, 2) if comissao is not None and comissao <= 1 else comissao)
 
     # ------------------------------------------------------------ interface
@@ -102,12 +105,22 @@ class ShopeeFonte(FonteOfertas):
         nos = ((self.consulta(q).get("shopeeOfferV2") or {}).get("nodes")) or []
         return [c for c in (campanha_de_no(n, agora) for n in nos) if c]
 
-    def comissoes(self, inicio, fim):
-        q = ("{conversionReport(purchaseTimeStart:%d, purchaseTimeEnd:%d, limit:500){nodes{conversionId purchaseTime "
-             "orders{orderId orderStatus items{itemId itemName itemPrice itemTotalCommission}}}}}"
-             % (int(inicio.timestamp()), int(fim.timestamp())))
-        nodes = (self.consulta(q).get("conversionReport") or {}).get("nodes") or []
-        itens = []
+    def comissoes(self, inicio, fim, max_paginas: int = 40):
+        """Relatório de conversões, lido página a página (scrollId) até o fim ou até o limite de segurança."""
+        nodes, scroll, vistos = [], None, set()
+        for _ in range(max_paginas):
+            extra = f', scrollId:{json.dumps(scroll)}' if scroll else ""
+            q = ("{conversionReport(purchaseTimeStart:%d, purchaseTimeEnd:%d, limit:500%s){nodes{conversionId purchaseTime "
+                 "orders{orderId orderStatus items{itemId itemName itemPrice itemTotalCommission}}} "
+                 "pageInfo{hasNextPage scrollId}}}" % (int(inicio.timestamp()), int(fim.timestamp()), extra))
+            rel = self.consulta(q).get("conversionReport") or {}
+            nodes += rel.get("nodes") or []
+            info = rel.get("pageInfo") or {}
+            scroll = info.get("scrollId")
+            if not info.get("hasNextPage") or not scroll or scroll in vistos:
+                break
+            vistos.add(scroll)
+        itens, refs = [], set()
         for n in nodes:
             data = datetime.fromtimestamp(int(n.get("purchaseTime") or fim.timestamp()), timezone.utc) - timedelta(hours=3)
             for pedido in n.get("orders") or []:
@@ -119,6 +132,10 @@ class ShopeeFonte(FonteOfertas):
                     if valor is None:
                         continue
                     venda = _num(item.get("itemPrice"))
+                    ref = f"{n.get('conversionId')}-{pedido.get('orderId')}-{item.get('itemId')}"
+                    if ref in refs:
+                        continue  # a mesma conversão repetida em páginas diferentes
+                    refs.add(ref)
                     itens.append({
                         "referencia_externa": f"{n.get('conversionId')}-{pedido.get('orderId')}-{item.get('itemId')}",
                         "id_externo": str(item.get("itemId")), "descricao": str(item.get("itemName") or "")[:300],
@@ -129,7 +146,12 @@ class ShopeeFonte(FonteOfertas):
 
     def testar(self):
         ofertas = self.buscar("fone", limite=1)
-        return f"shopee: REAL ✔ API respondeu ({len(ofertas)} oferta de teste)"
+        if not ofertas:
+            raise ErroIntegracao("a API respondeu, mas sem ofertas (conta de afiliado ativa?)", servico="shopee")
+        self.amostra_link = ofertas[0].link_afiliado  # conferido depois pelo validar-integracoes (atribuição)
+        agora = datetime.now(timezone.utc)
+        n = len(self.comissoes(agora - timedelta(days=1), agora))
+        return f"shopee: REAL ✔ busca e relatório de conversões responderam ({n} itens nas últimas 24h)"
 
 
 def _data_unix(v) -> datetime | None:

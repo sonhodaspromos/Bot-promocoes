@@ -81,7 +81,7 @@ def criar_arte(d: dict, foto: Image.Image, largura: int, altura: int, cfg: dict,
     f.thumbnail((area, alt_foto))
     img.paste(f, ((largura - f.width) // 2, y0 + 40 + (alt_foto - f.height) // 2))
 
-    desconto = float(d.get("desconto_pct") or 0)
+    desconto = float(d.get("desconto_pct") or 0) if d.get("desconto_comprovado", True) else 0
     if desconto >= 1:
         r = 95
         cx, cy = largura - m - r + 25, y0 + r - 25
@@ -109,7 +109,7 @@ def criar_arte(d: dict, foto: Image.Image, largura: int, altura: int, cfg: dict,
         y += ft.size + 12
 
     y += 15
-    if d.get("preco_referencia") and float(d["preco_referencia"]) > float(d["preco_promocional"]):
+    if d.get("desconto_comprovado", True) and d.get("preco_referencia") and float(d["preco_referencia"]) > float(d["preco_promocional"]):
         fa = fonte(40)
         txt = f"de {reais(d['preco_referencia'])}"
         dr.text((2 * m, y), txt, fill="#888888", font=fa)

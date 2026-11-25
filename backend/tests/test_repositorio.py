@@ -79,11 +79,13 @@ def test_falha_de_rede_vira_erro_de_banco():
         repo(s).canais()
 
 
-def test_comissoes_ignoram_repetidas():
-    s = SessaoFalsa().quando("POST", "comissoes", RespostaFalsa(201, texto=""))
+def test_comissoes_repetidas_sao_atualizadas_nao_duplicadas():
+    # (auditoria complementar) antes: "ignore-duplicates" descartava cancelamentos e mudanças de status
+    s = (SessaoFalsa().quando("GET", "comissoes", RespostaFalsa(200, []))
+         .quando("POST", "comissoes", RespostaFalsa(201, texto="")))
     repo(s).salvar_comissoes(1, [{"referencia_externa": "A", "valor_comissao": 2, "data_venda": "2026-11-20"}])
-    c = s.chamadas[0]
-    assert "ignore-duplicates" in c["headers"]["Prefer"] and c["params"]["on_conflict"] == "marketplace_id,referencia_externa"
+    c = next(x for x in s.chamadas if x["metodo"] == "POST")
+    assert "merge-duplicates" in c["headers"]["Prefer"] and c["params"]["on_conflict"] == "marketplace_id,referencia_externa"
     assert c["json"][0]["origem"] == "api"
 
 

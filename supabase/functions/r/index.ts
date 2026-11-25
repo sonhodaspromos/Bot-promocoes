@@ -3,14 +3,18 @@
 // - Conta o clique (registrar_clique) e redireciona para o link de afiliado VALIDADO.
 // - Link não validado/inativo: ninguém é redirecionado.
 // - Oferta encerrada (pausada/expirada): mostra aviso com opção de abrir o produto.
-// - O IP nunca é gravado: só um hash SHA-256 com sal, para não contar o mesmo clique duas vezes.
+// - O IP nunca é gravado: só um hash SHA-256 com sal SECRETO (CLIQUE_SAL, obrigatório) de IP + navegador.
+// - O IP vem do proxy (não do 1º X-Forwarded-For, que o visitante forja); repetidos, robôs e excessos
+//   são separados pelo banco (cliques_suspeitos) e não entram nas métricas.
 // Implantada com verify_jwt = false (é um link público).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { destinoSeguro, ehRobo, ipDoVisitante, salValido, textoDoVisitante } from "../_compartilhado/regras.ts";
 
 const URL_BASE = Deno.env.get("SUPABASE_URL")!;
 const CHAVE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SAL = Deno.env.get("CLIQUE_SAL") ?? URL_BASE;
-const ROBOS = /bot|crawler|spider|preview|facebookexternalhit|whatsapp|telegram|slack|discord|curl|python-requests|wget/i;
+const SAL = Deno.env.get("CLIQUE_SAL") ?? "";
+const SAL_OK = salValido(SAL, URL_BASE);
+if (!SAL_OK) console.error("CLIQUE_SAL ausente ou fraco: cliques não serão identificados (contam como suspeitos).");
 const cab = { apikey: CHAVE, Authorization: `Bearer ${CHAVE}`, "Content-Type": "application/json" };
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -41,20 +45,20 @@ Deno.serve(async (req: Request) => {
     let destino: string | null = null;
     let ativa = false;
 
-    if (ROBOS.test(ua)) {
+    if (ehRobo(ua)) {
       // pré-visualização de apps/robôs: não conta clique
       const r = await fetch(`${URL_BASE}/rest/v1/links_afiliados?id=eq.${link}&select=url,url_curta,validado,ativo`, { headers: cab });
       const [l] = r.ok ? await r.json() : [];
       if (l?.validado && l?.ativo) { destino = l.url_curta ?? l.url; ativa = true; }
     } else {
-      const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim();
+      const ip = ipDoVisitante(req.headers);
       const r = await fetch(`${URL_BASE}/rest/v1/rpc/registrar_clique`, {
         method: "POST",
         headers: cab,
         body: JSON.stringify({
           p_link: Number(link),
           p_canal: canal || null,
-          p_ip_hash: ip ? await sha256(SAL + ip) : null,
+          p_ip_hash: ip && SAL_OK ? await sha256(textoDoVisitante(SAL, ip, ua)) : null,
           p_user_agent: ua.slice(0, 400),
           p_referer: (req.headers.get("referer") ?? "").slice(0, 500) || null,
         }),
@@ -65,6 +69,7 @@ Deno.serve(async (req: Request) => {
       ativa = res.oferta_ativa;
     }
 
+    destino = destinoSeguro(destino);
     if (!destino) return pagina("Oferta indisponível", "Esta oferta não está mais disponível. Fique de olho no canal para as próximas promoções!");
     if (!ativa) return pagina("Essa oferta acabou 😢", "O produto esgotou ou o preço mudou. Fique de olho no canal para as próximas promoções!", destino);
     return new Response(null, { status: 302, headers: { Location: destino, "Cache-Control": "no-store" } });

@@ -25,6 +25,11 @@ def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 
+def agora_iso_menos(minutos: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutos)).isoformat()
+
+
 class Repositorio(ABC):
     # ---- leitura de cadastro
     @abstractmethod
@@ -73,6 +78,15 @@ class Repositorio(ABC):
     def enfileirar(self, promocao_id: int, canal_id: int, link_id: int, prioridade: int = 5) -> bool: ...
     @abstractmethod
     def pegar_fila(self, limite: int) -> list[ItemFila]: ...
+    @abstractmethod
+    def parada_emergencia(self) -> bool:
+        """Lê o botão de emergência direto do banco (sem cache)."""
+    @abstractmethod
+    def fila_atrasada(self, minutos: int) -> int:
+        """Itens pendentes cujo horário passou há mais de `minutos` (ofertas que deveriam ter saído)."""
+    @abstractmethod
+    def produto(self, produto_id: int) -> dict | None:
+        """id, id_externo, marketplace (código), preco_atual, disponivel, verificado_em."""
     @abstractmethod
     def marcar_publicando(self, fila_id: int) -> None:
         """Marca o item logo antes de enviar ao canal (proteção contra post duplicado se o job morrer)."""
@@ -127,7 +141,15 @@ class Repositorio(ABC):
 
     # ---- comissões, execuções, logs, credenciais
     @abstractmethod
-    def salvar_comissoes(self, marketplace_id: int, itens: list[dict]) -> int: ...
+    def salvar_comissoes(self, marketplace_id: int, itens: list[dict]) -> dict:
+        """Cria ou ATUALIZA (status e valores mudam: pendente → confirmada/cancelada). Comissão já 'paga' não volta atrás.
+        Devolve {"novos", "atualizados", "ignorados"}."""
+    @abstractmethod
+    def comissoes_api_periodo(self, marketplace_id: int, inicio: str, fim: str) -> list[dict]: ...
+    @abstractmethod
+    def registrar_importacao(self, dados: dict) -> None: ...
+    @abstractmethod
+    def ultima_importacao(self, marketplace_id: int, tipo: str) -> datetime | None: ...
     @abstractmethod
     def iniciar_execucao(self, origem: str, modo: str, versao: str) -> str: ...
     @abstractmethod
@@ -215,17 +237,29 @@ class SupabaseRepositorio(Repositorio):
             "nota": oferta.nota, "total_vendas": oferta.total_vendas, "imagem_url": oferta.imagem_url,
             "url_produto": oferta.url_produto, "disponivel": oferta.disponivel,
             "verificado_em": iso(agora()),
+            "preco_maximo_variacao": round(oferta.preco_maximo, 2) if oferta.preco_maximo else None,
+            "referencia_derivada": bool(oferta.referencia_derivada),
         }
         existente = self._get("produtos", select="id", marketplace_id=f"eq.{marketplace_id}",
                               id_externo=f"eq.{oferta.id_externo}")
         if existente:
             pid = existente[0]["id"]
-            self._req("PATCH", "produtos", params={"id": f"eq.{pid}"}, corpo=dados, prefer="return=minimal")
+            self._gravar_produto("PATCH", {"id": f"eq.{pid}"}, dados, "return=minimal")
             return pid, False
         dados.update({"marketplace_id": marketplace_id, "id_externo": oferta.id_externo,
                       "categoria_id": categoria_id, "demo": oferta.demo})
-        linhas = self._req("POST", "produtos", params={"select": "id"}, corpo=dados, prefer="return=representation")
+        linhas = self._gravar_produto("POST", {"select": "id"}, dados, "return=representation")
         return linhas[0]["id"], True
+
+    def _gravar_produto(self, metodo, params, dados, prefer):
+        try:
+            return self._req(metodo, "produtos", params=params, corpo=dados, prefer=prefer)
+        except ErroBanco as e:
+            if e.codigo not in ("PGRST204", "42703"):
+                raise
+            # banco sem a migration 017: grava sem os campos novos (variação e "preço de" derivado)
+            enxuto = {k: v for k, v in dados.items() if k not in ("preco_maximo_variacao", "referencia_derivada")}
+            return self._req(metodo, "produtos", params=params, corpo=enxuto, prefer=prefer)
 
     def criar_promocao(self, produto_id, oferta, status, origem):
         try:
@@ -265,16 +299,23 @@ class SupabaseRepositorio(Repositorio):
                 select=f"id,url,produto_id,produtos!inner(demo,marketplaces!inner({colunas}),promocoes!inner(status))",
                 validado="is.false", ativo="is.true", status_http="is.null",
                 **{"produtos.promocoes.status": "in.(aprovada,publicada)"}, limit=str(limite))
-        try:
-            linhas = buscar("codigo,dominios_afiliado,padrao_afiliado")
-        except ErroBanco as e:
-            if e.codigo not in ("42703", "PGRST200", "PGRST204"):
-                raise
-            linhas = buscar("codigo,dominios_afiliado")  # migration 015 ainda não aplicada
+        linhas = None
+        for colunas in ("codigo,dominios_afiliado,padrao_afiliado,dominios_destino,parametros_afiliado,id_afiliado",
+                        "codigo,dominios_afiliado,padrao_afiliado",   # banco sem a migration 017
+                        "codigo,dominios_afiliado"):                   # banco sem a migration 015
+            try:
+                linhas = buscar(colunas)
+                break
+            except ErroBanco as e:
+                if e.codigo not in ("42703", "PGRST200", "PGRST204"):
+                    raise
         return [{"link_id": l["id"], "url": l["url"], "produto_id": l["produto_id"],
                  "demo": l["produtos"]["demo"], "marketplace": l["produtos"]["marketplaces"]["codigo"],
                  "dominios": l["produtos"]["marketplaces"]["dominios_afiliado"],
-                 "padrao": l["produtos"]["marketplaces"].get("padrao_afiliado")} for l in linhas]
+                 "padrao": l["produtos"]["marketplaces"].get("padrao_afiliado"),
+                 "dominios_destino": l["produtos"]["marketplaces"].get("dominios_destino"),
+                 "parametros_afiliado": l["produtos"]["marketplaces"].get("parametros_afiliado") or [],
+                 "id_afiliado": l["produtos"]["marketplaces"].get("id_afiliado")} for l in linhas]
 
     def registrar_validacao(self, link_id, resultado):
         self._req("PATCH", "links_afiliados", params={"id": f"eq.{link_id}"}, prefer="return=minimal", corpo={
@@ -310,6 +351,23 @@ class SupabaseRepositorio(Repositorio):
         return [ItemFila(id=l["id"], promocao_id=l["promocao_id"], canal_id=l["canal_id"],
                          link_afiliado_id=l["link_afiliado_id"], tentativas=l["tentativas"]) for l in linhas]
 
+    def parada_emergencia(self):
+        linhas = self._get("configuracoes", select="valor", chave="eq.sistema.parada_emergencia")
+        return bool(linhas and linhas[0]["valor"] is True)
+
+    def fila_atrasada(self, minutos):
+        limite = (agora_iso_menos(minutos))
+        return len(self._get("fila_publicacoes", select="id", status="eq.pendente", agendado_para=f"lt.{limite}", limit="500"))
+
+    def produto(self, produto_id):
+        linhas = self._get("produtos", select="id,id_externo,preco_atual,disponivel,verificado_em,marketplaces!inner(codigo)",
+                           id=f"eq.{produto_id}")
+        if not linhas:
+            return None
+        p = linhas[0]
+        return {"id": p["id"], "id_externo": p["id_externo"], "marketplace": p["marketplaces"]["codigo"],
+                "preco_atual": float(p["preco_atual"]), "disponivel": p["disponivel"], "verificado_em": p["verificado_em"]}
+
     def marcar_publicando(self, fila_id):
         self._rpc("fila_marcar_publicando", p_id=fila_id)
 
@@ -322,7 +380,7 @@ class SupabaseRepositorio(Repositorio):
     def dados_publicacao(self, promocao_id):
         linhas = self._get("vw_promocoes_painel", id=f"eq.{promocao_id}", select=(
             "id,status,titulo,imagem_url,preco_promocional,preco_referencia,desconto_pct,marketplace,"
-            "marketplace_nome,link_id,link_validado,demo,pontuacao,classificacao"))
+            "marketplace_nome,link_id,link_validado,demo,pontuacao,classificacao,analise,produto_id"))
         return linhas[0] if linhas else None
 
     def registrar_publicacao(self, item, sucesso, id_mensagem, erro):
@@ -351,7 +409,7 @@ class SupabaseRepositorio(Repositorio):
             "promocoes",
             select="id,status,origem,demo,preco_promocional,preco_referencia,comissao_pct,produto_id,"
                    "produtos!inner(titulo,preco_atual,disponivel,nota,total_vendas,imagem_url,categoria_id,"
-                   "categorias(ativa),marketplaces!inner(codigo,modo))",
+                   "preco_maximo_variacao,referencia_derivada,categorias(ativa),marketplaces!inner(codigo,modo))",
             status="in.(encontrada,aprovada,publicada)", analisada_em="is.null", order="criado_em.asc", limit=str(limite))
         if not linhas:
             return []
@@ -371,6 +429,8 @@ class SupabaseRepositorio(Repositorio):
                 "titulo": p["titulo"], "preco_produto": float(p["preco_atual"]), "disponivel": p["disponivel"],
                 "nota": float(p["nota"]) if p["nota"] is not None else None, "total_vendas": p["total_vendas"],
                 "imagem_url": p["imagem_url"],
+                "preco_maximo_variacao": float(p["preco_maximo_variacao"]) if p.get("preco_maximo_variacao") is not None else None,
+                "referencia_derivada": bool(p.get("referencia_derivada")),
                 "categoria_ativa": (p.get("categorias") or {}).get("ativa") if p.get("categoria_id") else None,
                 "marketplace": p["marketplaces"]["codigo"], "marketplace_modo": p["marketplaces"]["modo"],
                 "link": links.get(x["produto_id"])})
@@ -450,12 +510,52 @@ class SupabaseRepositorio(Repositorio):
 
     # ------------------------------------------------------------ comissões, execução, logs
     def salvar_comissoes(self, marketplace_id, itens):
-        if not itens:
-            return 0
-        corpo = [{**i, "marketplace_id": marketplace_id, "origem": "api"} for i in itens]
-        self._req("POST", "comissoes", params={"on_conflict": "marketplace_id,referencia_externa"},
-                  corpo=corpo, prefer="return=minimal,resolution=ignore-duplicates")
-        return len(corpo)
+        resultado = {"novos": 0, "atualizados": 0, "ignorados": 0}
+        unicos = {i["referencia_externa"]: i for i in itens if i.get("referencia_externa")}
+        if not unicos:
+            return resultado
+        existentes = {}
+        refs = sorted(unicos)
+        for k in range(0, len(refs), 100):
+            for e in self._get("comissoes", select="referencia_externa,status,valor_comissao",
+                               marketplace_id=f"eq.{marketplace_id}", referencia_externa=self._in(refs[k:k + 100])):
+                existentes[e["referencia_externa"]] = e
+        corpo = []
+        for ref, i in unicos.items():
+            antes = existentes.get(ref)
+            if antes and antes["status"] == "paga":
+                resultado["ignorados"] += 1
+                continue
+            if antes is None:
+                resultado["novos"] += 1
+            elif antes["status"] != i.get("status") or float(antes["valor_comissao"]) != float(i["valor_comissao"]):
+                resultado["atualizados"] += 1
+            corpo.append({**i, "marketplace_id": marketplace_id, "origem": "api"})
+        if corpo:
+            self._req("POST", "comissoes", params={"on_conflict": "marketplace_id,referencia_externa"},
+                      corpo=corpo, prefer="return=minimal,resolution=merge-duplicates")
+        return resultado
+
+    def comissoes_api_periodo(self, marketplace_id, inicio, fim):
+        return self._get("comissoes", select="referencia_externa,status,valor_comissao", marketplace_id=f"eq.{marketplace_id}",
+                         origem="eq.api", data_venda=f"gte.{inicio}", **{"and": f"(data_venda.lte.{fim})"}, limit="10000")
+
+    def registrar_importacao(self, dados):
+        try:
+            self._req("POST", "comissoes_importacoes", corpo=dados, prefer="return=minimal")
+        except ErroBanco as e:
+            if e.codigo not in ("42P01", "PGRST205"):
+                raise  # tabela ausente (migration 017 não aplicada): segue sem o registro
+
+    def ultima_importacao(self, marketplace_id, tipo):
+        try:
+            linhas = self._get("comissoes_importacoes", select="criado_em", marketplace_id=f"eq.{marketplace_id}",
+                               tipo=f"eq.{tipo}", status="neq.erro", order="criado_em.desc", limit="1")
+        except ErroBanco as e:
+            if e.codigo in ("42P01", "PGRST205"):
+                return None
+            raise
+        return datetime.fromisoformat(linhas[0]["criado_em"].replace("Z", "+00:00")) if linhas else None
 
     def iniciar_execucao(self, origem, modo, versao):
         linhas = self._req("POST", "execucoes", params={"select": "id"}, prefer="return=representation",

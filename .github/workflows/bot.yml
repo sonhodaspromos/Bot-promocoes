@@ -36,6 +36,11 @@ jobs:
       - name: Rodar o bot
         run: python -m app.main rodar --origem "${{ inputs.origem || 'agendada' }}"
         env:
+          # Ambiente obrigatório: demonstracao | homologacao | producao. Em produção, integração listada
+          # em INTEGRACOES_ATIVAS sem credencial BLOQUEIA a rodada (nunca cai para demonstração).
+          AMBIENTE: ${{ vars.AMBIENTE }}
+          INTEGRACOES_ATIVAS: ${{ vars.INTEGRACOES_ATIVAS }}
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}

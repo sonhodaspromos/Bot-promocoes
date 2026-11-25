@@ -16,7 +16,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  testar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "playwright>=1.47,<2" && python -m playwright install --with-deps chromium
+      - run: python frontend/testes/testar_painel.py
+
   publicar:
+    needs: testar          # painel com teste falhando não é publicado
     runs-on: ubuntu-latest
     environment:
       name: github-pages

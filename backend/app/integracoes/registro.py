@@ -1,13 +1,17 @@
 """Registro de integrações: decide, para cada loja e canal, qual implementação usar.
 
-Regra: com credenciais completas -> implementação REAL; sem credenciais -> DEMONSTRAÇÃO
-(claramente identificada). Para incluir uma integração nova, adicione-a aqui.
+Com AMBIENTE definido (o normal), quem decide é o ambiente (ver app/ambiente.py):
+  demonstracao -> tudo simulado; homologacao -> lojas reais, canais simulados;
+  producao -> só reais, e credencial ausente BLOQUEIA o bot (nunca vira demonstração).
+Sem ambiente (só testes e `simular`): com credenciais -> REAL; sem -> DEMONSTRAÇÃO.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..ambiente import Ambiente
 from ..config import REAL, Config
+from ..erros import ErroConfiguracao
 from ..cliente_http import ClienteHTTP
 from .base import CanalPublicacao, FonteOfertas
 from .canais.demo import DemoCanal
@@ -30,7 +34,9 @@ class Integracoes:
         return "real" if any(c.modo == "real" for c in self.canais.values()) else "demo"
 
 
-def montar(config: Config, ordenacao_shopee: int = 2) -> Integracoes:
+def montar(config: Config, ordenacao_shopee: int = 2, ambiente: Ambiente | None = None) -> Integracoes:
+    if ambiente is not None:
+        return _montar_por_ambiente(config, ordenacao_shopee, ambiente)
     t = config.timeout_http
     integ = Integracoes()
 
@@ -58,4 +64,44 @@ def montar(config: Config, ordenacao_shopee: int = 2) -> Integracoes:
     else:
         integ.canais["instagram_story"] = DemoCanal("instagram_story")
         integ.canais["instagram_feed"] = DemoCanal("instagram_feed")
+    return integ
+
+
+def _montar_por_ambiente(config: Config, ordenacao: int, amb: Ambiente) -> Integracoes:
+    t = config.timeout_http
+    integ = Integracoes()
+    if amb.nome == "demonstracao":
+        integ.fontes["demo"] = DemoFonte()
+        integ.fontes["mercado_livre"] = ManualFonte("mercado_livre")
+        integ.canais = {c: DemoCanal(c) for c in ("telegram", "instagram_story", "instagram_feed")}
+        return integ
+    if config.forcar_demo:
+        raise ErroConfiguracao(f"Conflito: AMBIENTE={amb.nome} com MODO_DEMO ligado. Remova MODO_DEMO.")
+
+    exigidas = {"shopee": ["shopee"], "telegram": ["telegram"], "instagram": ["instagram", "imgbb"]}
+    faltando = [c for i in amb.ativas for c in exigidas[i] if config.modo(c) != REAL]
+    if faltando:
+        raise ErroConfiguracao(
+            f"{amb.nome.upper()}: credenciais ausentes para {', '.join(sorted(set(faltando)))}. "
+            "O bot foi BLOQUEADO (não troca para demonstração). Cadastre as credenciais ou tire a "
+            "integração de INTEGRACOES_ATIVAS.")
+
+    if "shopee" in amb.ativas:
+        integ.fontes["shopee"] = ShopeeFonte(config.credencial("shopee", "APP_ID"), config.credencial("shopee", "SECRET"),
+                                             ClienteHTTP("shopee", timeout=t), ordenacao=ordenacao)
+    integ.fontes["mercado_livre"] = ManualFonte("mercado_livre")
+
+    if amb.nome == "homologacao":  # nunca publica de verdade, nem com token configurado
+        integ.canais = {c: DemoCanal(c) for c in ("telegram", "instagram_story", "instagram_feed")}
+        return integ
+
+    if "telegram" in amb.ativas:
+        integ.canais["telegram"] = TelegramCanal(config.credencial("telegram", "TOKEN"), config.credencial("telegram", "CANAL"),
+                                                 ClienteHTTP("telegram", timeout=t))
+    if "instagram" in amb.ativas:
+        hospedagem = ImgBB(config.credencial("imgbb", "KEY"), ClienteHTTP("imgbb", timeout=t))
+        for tipo in ("story", "feed"):
+            integ.canais[f"instagram_{tipo}"] = InstagramCanal(
+                tipo, config.credencial("instagram", "TOKEN"), config.credencial("instagram", "USER_ID"),
+                hospedagem, ClienteHTTP("instagram", timeout=t))
     return integ

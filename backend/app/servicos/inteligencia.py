@@ -16,6 +16,7 @@ from ..cliente_http import ClienteHTTP
 from ..erros import ErroBanco, ErroIntegracao
 from ..inteligencia import EntradaAnalise, PontoPreco, Regras, analisar
 from ..logs import Log
+from ..rede import ImagemRecusada, baixar_imagem
 from ..repositorio import Repositorio
 from .comum import agora_utc, ajuste
 
@@ -62,11 +63,10 @@ class ServicoInteligencia:
         if len(self._medidas) >= self.max_imagens:
             return None, None
         try:
-            resp = self.http.get(url)
-            conteudo = resp.content[:LIMITE_BYTES_IMAGEM]
+            conteudo = baixar_imagem(self.http, url, max_bytes=LIMITE_BYTES_IMAGEM)
             with Image.open(io.BytesIO(conteudo)) as img:
                 self._medidas[url] = img.size
-        except (ErroIntegracao, OSError, ValueError):
+        except (ImagemRecusada, OSError, ValueError):
             self._medidas[url] = (None, None)
         return self._medidas[url]
 
@@ -103,6 +103,9 @@ class ServicoInteligencia:
                 entrada = EntradaAnalise(
                     titulo=it["titulo"], preco=preco, preco_produto=preco_produto,
                     preco_referencia=referencia, origem_referencia=origem_ref,
+                    preco_maximo_variacao=it.get("preco_maximo_variacao") if not cupom else None,
+                    referencia_derivada=bool(it.get("referencia_derivada")) and not cupom,
+                    desconto_por_cupom=bool(cupom),
                     historico=[PontoPreco(h["preco"], _data(h["quando"]), h.get("disponivel", True))
                                for h in historicos.get(it["produto_id"], [])],
                     disponivel=bool(it.get("disponivel")),
