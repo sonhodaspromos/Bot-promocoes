@@ -51,7 +51,7 @@ class ServicoComissoes:
         try:
             itens = fonte.comissoes(inicio, fim)
             for i in itens:
-                i.pop("id_externo", None)
+                i["id_externo_item"] = i.pop("id_externo", None)
             r = self.repo.salvar_comissoes(mkt, itens)
         except (ErroIntegracao, ErroBanco) as e:
             self.log.erro("comissoes", f"{fonte.codigo}: não consegui importar comissões", erro=str(e))
@@ -77,7 +77,7 @@ class ServicoComissoes:
             try:
                 oficiais = {i["referencia_externa"]: i for i in fonte.comissoes(inicio, fim)}
                 for i in oficiais.values():
-                    i.pop("id_externo", None)
+                    i["id_externo_item"] = i.pop("id_externo", None)
                 r = self.repo.salvar_comissoes(mkt, list(oficiais.values()))
                 banco = {c["referencia_externa"]: c for c in self.repo.comissoes_api_periodo(mkt, ini_txt, fim_txt)}
             except (ErroIntegracao, ErroBanco) as e:

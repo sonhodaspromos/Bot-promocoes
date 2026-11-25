@@ -127,6 +127,9 @@ class Orquestrador:
         def publicar():
             resumo.publicadas, resumo.falhas_publicacao = self.publicacao.processar_fila(cfg)
 
+        def experimentos():
+            self.publicacao.selecao.avaliar_experimento()
+
         def cupons():
             r = self.cupons.executar(cfg)
             resumo.campanhas, resumo.sugestoes_cupom, resumo.cupons_publicados = r["campanhas"], r["sugestoes"], r["cupons_publicados"]
@@ -134,7 +137,7 @@ class Orquestrador:
         etapas = [("configuração", carregar), ("modos", self.sincronizar_modos), ("monitor", monitorar),
                   ("encerrar pausadas", encerrar), ("comissões", importar), ("busca", buscar),
                   ("validação de links", validar), ("inteligência", analisar), ("fila", enfileirar), ("publicação", publicar),
-                  ("cupons", cupons)]
+                  ("cupons", cupons), ("testes A/B", experimentos)]
         for nome, funcao in etapas:
             etapa(nome, funcao)
 

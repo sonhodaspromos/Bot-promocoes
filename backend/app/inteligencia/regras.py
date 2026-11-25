@@ -38,6 +38,9 @@ class Regras:
     tolerancia_preco_produto_pct: float = 1.0   # diferença aceita entre preço da oferta e do produto
     exigir_desconto_comprovado: bool = False     # produção: só desconto confirmado por histórico próprio ou cupom
     variacao_preco_max_pct: float = 5.0          # diferença máxima aceita entre o menor e o maior preço das variações
+    bloquear_desconto_artificial: bool = True    # "sobe e desce" detectado com histórico suficiente = bloqueio
+    historico_cobertura_minima_pct: float = 80.0 # % da janela observada para tirar conclusões
+    alta_artificial_pct: float = 15.0            # alta recente acima do típico de 90 dias que caracteriza "sobe e desce"
 
     @property
     def pesos(self) -> dict[str, float]:
@@ -73,6 +76,9 @@ class Regras:
             janela_repeticao_horas=_num(cfg, p + "janela_repeticao_horas", 24),
             exigir_desconto_comprovado=bool(cfg.get(p + "exigir_desconto_comprovado") or False),
             variacao_preco_max_pct=_num(cfg, p + "variacao_preco_max_pct", 5),
+            bloquear_desconto_artificial=cfg.get(p + "bloquear_desconto_artificial") is not False,
+            historico_cobertura_minima_pct=_num(cfg, p + "historico_cobertura_minima_pct", 80),
+            alta_artificial_pct=_num(cfg, p + "alta_artificial_pct", 15),
         )
         r.validar()
         return r

@@ -134,5 +134,21 @@ function explicacao(o) {
     <table class="comps"><thead><tr><th>Quesito</th><th class="n">Pontos</th><th>Detalhe</th></tr></thead><tbody>${comps}</tbody></table>
     <p class="m">Desconto real: ${a.desconto_real == null ? "não calculado" : esc(String(a.desconto_real).replace(".", ",")) + "%"}
       · base: ${esc(a.base_desconto || "—")}. Quesitos com “—” não tinham dados confiáveis e ficaram fora da conta.</p>
+    ${historicoPrecos(a.historico_precos)}
   </details>`;
+}
+
+function historicoPrecos(h) {
+  if (!h || !h.janelas) return "";
+  const linha = (d) => {
+    const j = h.janelas[d];
+    if (!j || j.minimo == null) return `<tr><td>${d} dias</td><td colspan="3" class="m">sem preço observado</td></tr>`;
+    return `<tr><td>${d} dias</td><td class="n">${brl(j.minimo)}</td><td class="n">${brl(j.maximo)}</td>
+      <td class="m">${j.suficiente ? `${Math.round(j.cobertura_pct)}% observado` : `insuficiente (${Math.round(j.cobertura_pct)}% observado): sem conclusões`}</td></tr>`;
+  };
+  return `<table class="comps historico"><thead><tr><th>Histórico</th><th class="n">Mínimo</th><th class="n">Máximo</th><th>Cobertura</th></tr></thead>
+    <tbody>${[7, 30, 90].map(linha).join("")}</tbody></table>
+    <p class="m">${h.menor_preco != null ? `Menor preço observado: ${brl(h.menor_preco)} (monitorado há ${Math.round(h.dias_monitorados)} dias).` : ""}
+      ${(h.desconto_artificial || []).map((t) => `<br>⚠️ ${esc(t)}`).join("")}
+      ${(h.sem_dados || []).map((t) => `<br>Sem dados: ${esc(t)}`).join("")}</p>`;
 }

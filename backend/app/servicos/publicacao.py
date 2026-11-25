@@ -37,6 +37,7 @@ from ..rede import ImagemRecusada, baixar_imagem
 from .comum import agora_utc, ajuste, dentro_do_horario, fuso, inicio_do_dia, num
 from .validacao import LinkTemporariamenteIndisponivel, validar_link
 from ..requisitos import faltando_para_publicar
+from ..inteligencia.experimentos import atribuir as atribuir_variante
 
 CANAIS_POR_OFERTA = ("telegram", "instagram_story")  # o feed recebe só a oferta imperdível do dia
 
@@ -52,6 +53,10 @@ class ServicoPublicacao:
         self.canais_bloqueados: dict[str, str] = {}  # canal → motivo (token vencido nesta rodada)
         self._cota: dict[str, int | None] = {}       # cota restante do Instagram, consultada 1x por rodada
         self._bloqueio_real: str | None = None       # motivo para não publicar em canal real nesta rodada
+        from .selecao import ServicoSelecao
+        self.selecao = ServicoSelecao(repo, log, relogio=self.relogio)
+        self._experimento: dict | None | bool = False   # False = ainda não consultado nesta rodada
+        self._extras: dict[int, dict] = {}              # variante A/B de cada item publicado
         self._requisitos_conferidos = False
 
     # ------------------------------------------------------------ 1. validar links
@@ -101,18 +106,53 @@ class ServicoPublicacao:
             else:
                 hoje = {p["promocao_id"] for p in self.repo.publicacoes_desde(inicio_do_dia(cfg, agora), list(CANAIS_POR_OFERTA))}
                 vagas = int(num(cfg, "publicacao.max_por_dia")) - len(hoje)
-                selecionadas += automaticas[: max(0, min(int(num(cfg, "publicacao.por_rodada")), vagas))]
+                quantas = max(0, min(int(num(cfg, "publicacao.por_rodada")), vagas))
+                selecionadas += self._selecionar(automaticas, quantas, cfg)
 
         n = 0
         for promo in selecionadas:
             for codigo in CANAIS_POR_OFERTA:
                 canal = canais.get(codigo)
-                if canal and self._pode_ir(promo, codigo, canal["id"], cfg):
+                if canal and self._pode_ir(promo, codigo, canal["id"], cfg) and not self._saturado(promo, codigo, cfg):
                     prioridade = 1 if promo.get("origem") == "manual" else 5
                     if self.repo.enfileirar(promo["id"], canal["id"], promo["link_id"], prioridade):
                         n += 1
         n += self._enfileirar_feed(cfg, agora, canais)
         return n
+
+    def _selecionar(self, automaticas: list[dict], quantas: int, cfg: dict) -> list[dict]:
+        """Ranking comercial (receita esperada sem sacrificar qualidade) com explicação de cada decisão.
+        Se a seleção falhar, usa a ordem por nota do motor (comportamento anterior) e avisa."""
+        try:
+            decisoes = self.selecao.ordenar(automaticas, cfg)
+        except Exception as e:  # nunca impede a publicação
+            self.log.aviso("selecao", "Seleção comercial indisponível nesta rodada; uso a ordem por nota do motor",
+                           erro=f"{type(e).__name__}: {e}")
+            return automaticas[:quantas]
+        por_id = {c["id"]: c for c in automaticas}
+        escolhidas = []
+        for d in decisoes:
+            if not d.selecionada:
+                continue
+            if len(escolhidas) < quantas:
+                escolhidas.append(por_id[d.promocao_id])
+            else:
+                d.selecionada = False
+                d.recusa = f"sem vaga nesta rodada ({d.posicao}º lugar; limite de {quantas} por rodada/dia)"
+        self.selecao.registrar(decisoes)
+        return escolhidas
+
+    def _saturado(self, promo: dict, codigo: str, cfg: dict) -> bool:
+        """Canal com queda forte de cliques: nesta rodada só ofertas excelentes (manuais sempre passam)."""
+        if promo.get("origem") == "manual" or promo.get("classificacao") == "excelente":
+            return False
+        try:
+            motivo = self.selecao.canal_saturado(cfg, codigo)
+        except Exception:
+            return False
+        if motivo:
+            self.log.info("selecao", f"Oferta não enviada a {codigo}: {motivo}", promocao_id=promo.get("id"))
+        return bool(motivo)
 
     def _pode_ir(self, promo: dict, codigo: str, canal_id: int | None = None, cfg: dict | None = None) -> bool:
         if promo.get("demo") and self.canais[codigo].modo == "real":
@@ -227,7 +267,8 @@ class ServicoPublicacao:
             return self._tratar_erro_canal(item, canal, codigo, ErroIntegracao(
                 f"{codigo}: falha inesperada durante o envio ({type(e).__name__}: {e})", servico=codigo, incerto=True))
         try:
-            self.repo.registrar_publicacao(item, True, id_msg, None)
+            extras = self._extras.get(item.id)   # só passa quando há teste A/B (compatível com repositórios antigos)
+            self.repo.registrar_publicacao(item, True, id_msg, None, *((extras,) if extras else ()))
         except RegraViolada as e:
             self.log.critico("publicacao", "O banco recusou registrar a publicação (o post SAIU no canal)",
                              codigo=e.codigo, erro=str(e), mensagem=id_msg, promocao_id=item.promocao_id)
@@ -323,6 +364,14 @@ class ServicoPublicacao:
             self.log.erro("publicacao", "Não consegui registrar a falha", erro=str(e))
         return False
 
+    def _experimento_ativo(self) -> dict | None:
+        if self._experimento is False:
+            try:
+                self._experimento = self.repo.experimento_ativo()
+            except ErroBanco:
+                self._experimento = None
+        return self._experimento or None
+
     def conferir_requisitos(self) -> str | None:
         """Antes do primeiro envio real da rodada: o banco tem as migrations e RPCs exigidas?"""
         if self._requisitos_conferidos:
@@ -413,10 +462,21 @@ class ServicoPublicacao:
         aplicar_desconto_da_analise(dados)
         foto = arte.abrir_foto(self._foto(dados.get("imagem_url"), cache))
         link = f"{self.url_cliques}?l={item.link_afiliado_id}&c={canal.codigo}"
+        exp = self._experimento_ativo()
+        variante_legenda = variante_arte = "A"
+        if exp:
+            variante = atribuir_variante(exp["id"], item.promocao_id, canal.codigo)
+            self._extras[item.id] = {"experimento_id": exp["id"], "variante": variante}
+            if exp.get("tipo") == "legenda":
+                variante_legenda = variante
+            else:
+                variante_arte = variante
+        if variante_arte == "B":
+            cfg = dict(cfg, **{"visual.cor_principal": cfg.get("experimentos.arte_b_cor") or "#1F2937"})
         if canal.codigo.startswith("instagram"):
-            legenda = textos.legenda_instagram(dados, cfg, destaque)
+            legenda = textos.legenda_instagram(dados, cfg, destaque, variante_legenda)
         else:
-            legenda = textos.legenda_telegram(dados, link, cfg)
+            legenda = textos.legenda_telegram(dados, link, cfg, variante_legenda)
         return ConteudoPublicacao(
             promocao_id=item.promocao_id, titulo=dados["titulo"], preco=float(dados["preco_promocional"]),
             preco_original=float(dados["preco_referencia"]) if dados.get("preco_referencia") else None,

@@ -66,6 +66,24 @@ const DADOS = {
     { id: 2, data_venda: hoje, valor_comissao: 2, status: "pendente", origem: "api", descricao: "Fone", marketplaces: { nome: "Shopee" } },
   ],
   credenciais_integracoes: [{ integracao: "telegram", nome: "TOKEN", dica: "••••a1b2", atualizado_em: agora }],
+  vw_desempenho_publicacoes: params.get("sem_desempenho") === "1" ? [] : [
+    { publicacao_id: 1, promocao_id: 12, publicado_em: agora, canal: "telegram", periodo: "noite (18h–24h)", categoria: "Casa", faixa_preco: "R$ 250–500", cliques: 9, cliques_2h: 5, comissao_atribuida: 7.5, conversoes_atribuidas: 1 },
+    { publicacao_id: 2, promocao_id: 12, publicado_em: agora, canal: "instagram_story", periodo: "noite (18h–24h)", categoria: "Casa <b>x</b>", faixa_preco: "R$ 250–500", cliques: 3, cliques_2h: 1, comissao_atribuida: 0, conversoes_atribuidas: 0 },
+  ],
+  inteligencia_resumos: [
+    { tipo: "aprendizado", calculado_em: agora, dados: { publicacoes: 2, cliques: 12, conversoes: 1, amostra_minima: 20, sem_dados: ["Só 2 publicação(ões) real(is); o aprendizado começa com 20"] } },
+    { tipo: "saturacao", calculado_em: agora, dados: { canais: { telegram: { saturado: false, explicacao: "telegram: dados insuficientes para medir saturação" } }, categorias_cheias: {} } },
+  ],
+  experimentos: [],
+  vw_conciliacao_comissoes: [
+    { marketplace: "shopee", competencia: "2026-09-01", valor_pendente: 0, valor_confirmado: 25.5, valor_cancelado: 4, valor_pago: 0, pendentes_antigas: 0, confirmadas_sem_repasse: 2, repasse: null },
+  ],
+  selecoes_ofertas: [
+    { promocao_id: 12, decidido_em: agora, selecionada: true, posicao: 1, prioridade: 71, receita_esperada: null,
+      detalhes: { resumo: "1º lugar · Prioridade 71/100 (excelente)", fatores: [{ nome: "qualidade", nota: 0.88, explicacao: "nota 88/100 no motor de inteligência" }], avisos: [], sem_dados: ["estoque: a loja não informa a quantidade (só se está disponível)", "receita esperada: vendas atribuídas insuficientes para estimar a conversão"] } },
+    { promocao_id: 11, decidido_em: agora, selecionada: false, posicao: null, prioridade: 40, receita_esperada: null,
+      detalhes: { resumo: "Recusada: mesmo produto (mesmo GTIN, confiança alta) mais barato em mercado_livre", fatores: [], avisos: [], sem_dados: [] } },
+  ],
   promocoes: [],
   vw_cupons_painel: [
     { id: 41, marketplace_id: 1, marketplace_codigo: "shopee", marketplace_nome: "Shopee", tipo: "cupom", origem: "manual", titulo: "Cupom de fim de semana",
@@ -138,6 +156,11 @@ export function createClient() {
       window.__chamadas.push({ rpc: nome, args });
       if (nome === "meu_papel") return { data: PAPEL === "nenhum" ? null : PAPEL, error: null };
       if (nome === "minha_sessao") return { data: [{ papel: PAPEL === "nenhum" || aalAtual !== "aal2" ? null : PAPEL, aal: aalAtual, mfa_exigido: true }], error: null };
+      if (nome === "registrar_repasse") {
+        if (PAPEL !== "dono") return { data: null, error: { code: "42501", message: "Só o dono registra repasses." } };
+        const ok = Math.abs(args.p_valor - 25.5) <= 1;
+        return { data: { status: ok ? "conciliado" : "divergente", itens: 2, valor_esperado: 25.5, diferenca: args.p_valor - 25.5 }, error: null };
+      }
       if (nome === "ativar_parada_emergencia") { cfg("sistema.parada_emergencia", true); cfg("sistema.parada_motivo", args.p_motivo); return { data: null, error: null }; }
       if (nome === "desativar_parada_emergencia") {
         if (PAPEL !== "dono") return { data: null, error: { code: "42501", message: "só o dono" } };

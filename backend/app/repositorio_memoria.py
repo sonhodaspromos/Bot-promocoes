@@ -37,6 +37,7 @@ def _dominio_ok(url: str, dominios: list[str]) -> bool:
     return any(host == d or host.endswith("." + d) for d in dominios)
 
 
+from .repositorio import CAMPOS_OPCIONAIS_PRODUTO, dados_de_ranking  # noqa: E402
 from .requisitos import COLUNAS_PUBLICACAO, CONFIGS_PUBLICACAO, RPCS_PUBLICACAO  # noqa: E402
 
 
@@ -49,7 +50,8 @@ class MemoriaRepositorio(Repositorio):
                         "colunas": sorted(COLUNAS_PUBLICACAO)}
         self.t = {k: [] for k in ("marketplaces", "canais", "categorias", "produtos", "promocoes", "links",
                                   "fila", "historico", "comissoes", "execucoes", "logs", "precos", "cupons", "cupons_produtos", "cupons_pub",
-                                  "comissoes_importacoes")}
+                                  "comissoes_importacoes", "selecoes", "equivalentes", "experimentos", "resumos",
+                                  "cliques", "comissoes_eventos")}
         self.cofre: dict[tuple[str, str], str] = {}
         self.relogio = agora  # os testes trocam para simular a passagem do tempo
         for codigo, nome, doms, modo, padrao in [
@@ -95,6 +97,7 @@ class MemoriaRepositorio(Repositorio):
             self.atualizar_produto(p["id"], oferta.preco, oferta.disponivel, oferta.preco_original)
             p.update(titulo=oferta.titulo, imagem_url=oferta.imagem_url, preco_maximo_variacao=oferta.preco_maximo,
                      referencia_derivada=oferta.referencia_derivada)
+            p.update({c: getattr(oferta, c) for c in CAMPOS_OPCIONAIS_PRODUTO if getattr(oferta, c, None) is not None})
             return p["id"], False
         p = {"id": self._id(), "marketplace_id": marketplace_id, "id_externo": oferta.id_externo,
              "categoria_id": categoria_id, "titulo": oferta.titulo, "preco_atual": oferta.preco,
@@ -102,6 +105,7 @@ class MemoriaRepositorio(Repositorio):
              "demo": oferta.demo or mkt["modo"] == "demo", "verificado_em": self.relogio(),
              "nota": oferta.nota, "total_vendas": oferta.total_vendas,
              "preco_maximo_variacao": oferta.preco_maximo, "referencia_derivada": oferta.referencia_derivada}
+        p.update({c: getattr(oferta, c, None) for c in CAMPOS_OPCIONAIS_PRODUTO})
         self.t["produtos"].append(p)
         self._registrar_preco(p)
         return p["id"], True
@@ -319,7 +323,7 @@ class MemoriaRepositorio(Repositorio):
         pr = self._um("promocoes", id=promocao_id)
         return self._view(pr) if pr else None
 
-    def registrar_publicacao(self, item, sucesso, id_mensagem, erro):
+    def registrar_publicacao(self, item, sucesso, id_mensagem, erro, extras=None):
         pr = self._um("promocoes", id=item.promocao_id)
         canal = self._um("canais", id=item.canal_id)
         link = self._um("links", id=item.link_afiliado_id)
@@ -328,10 +332,14 @@ class MemoriaRepositorio(Repositorio):
             raise RegraViolada("link não validado", codigo="P0010")
         if sucesso and pr["demo"] and canal["modo"] == "real":
             raise RegraViolada("demo em canal real", codigo="P0015")
+        prod = self._um("produtos", id=pr["produto_id"])
         self.t["historico"].append({"id": self._id(), "fila_id": item.id, "promocao_id": item.promocao_id,
                                     "canal_id": item.canal_id, "resultado": "sucesso" if sucesso else "erro",
                                     "id_mensagem_externa": id_mensagem, "erro": erro, "demo": demo,
-                                    "publicado_em": self.relogio()})
+                                    "publicado_em": self.relogio(), "preco_publicado": pr["preco_promocional"],
+                                    "categoria_id": prod.get("categoria_id") if prod else None,
+                                    "experimento_id": (extras or {}).get("experimento_id"),
+                                    "variante": (extras or {}).get("variante")})
         if sucesso and (not demo or pr["demo"]) and pr["status"] != "publicada":
             pr.update(status="publicada", publicada_em=self.relogio())
         f = self._um("fila", id=item.id)
@@ -377,7 +385,11 @@ class MemoriaRepositorio(Repositorio):
         saida = {}
         for h in self.t["precos"]:
             if h["produto_id"] in produto_ids and h["quando"] >= desde:
-                saida.setdefault(h["produto_id"], []).append(dict(h))
+                saida.setdefault(h["produto_id"], []).append(dict(h, ancora=False))
+        for pid in produto_ids:   # âncora: o último preço antes da janela (espelho de historico_precos_janela)
+            antes = [h for h in self.t["precos"] if h["produto_id"] == pid and h["quando"] < desde]
+            if antes:
+                saida.setdefault(pid, []).insert(0, dict(max(antes, key=lambda h: h["quando"]), ancora=True))
         return saida
 
     def titulos_ativos(self, desde):
@@ -473,9 +485,27 @@ class MemoriaRepositorio(Repositorio):
                     r["atualizados"] += 1
                 antes.update({k: v for k, v in i.items()})
             else:
-                self.t["comissoes"].append(dict(i, marketplace_id=marketplace_id, origem="api"))
+                nova = dict(i, marketplace_id=marketplace_id, origem="api")
+                self._atribuir_comissao(nova)
+                self.t["comissoes"].append(nova)
                 r["novos"] += 1
         return r
+
+    def _atribuir_comissao(self, c):
+        """Espelho do gatilho privado.comissao_atribuir (migration 019)."""
+        from datetime import date as _date
+        if not c.get("produto_id") and c.get("id_externo_item"):
+            p = self._um("produtos", marketplace_id=c["marketplace_id"], id_externo=c["id_externo_item"])
+            c["produto_id"] = p["id"] if p else None
+        if not c.get("produto_id"):
+            c["atribuicao"] = "item_desconhecido"
+            return
+        venda = _date.fromisoformat(c["data_venda"]) if isinstance(c["data_venda"], str) else c["data_venda"]
+        promos = {pr["id"] for pr in self.t["promocoes"] if pr["produto_id"] == c["produto_id"]}
+        pubs = [h for h in self.t["historico"] if h["promocao_id"] in promos and h["resultado"] == "sucesso"
+                and not h["demo"] and h["publicado_em"].date() <= venda]
+        c["promocao_id"] = max(pubs, key=lambda h: h["publicado_em"])["promocao_id"] if pubs else None
+        c["atribuicao"] = "oferta_publicada" if c["promocao_id"] else "produto_sem_publicacao"
 
     def comissoes_api_periodo(self, marketplace_id, inicio, fim):
         return [c for c in self.t["comissoes"] if c["marketplace_id"] == marketplace_id and c.get("origem") == "api"
@@ -627,3 +657,84 @@ class MemoriaRepositorio(Repositorio):
 
     def obter_credencial(self, integracao, nome):
         return self.cofre.get((integracao, nome))
+
+    # ---------------------------------------------------------------- inteligência comercial (espelho da 019)
+    def dados_ranking(self, promocao_ids):
+        saida = {}
+        for pid in promocao_ids:
+            pr = self._um("promocoes", id=pid)
+            if not pr:
+                continue
+            prod = self._um("produtos", id=pr["produto_id"])
+            mkt = self._um("marketplaces", id=prod["marketplace_id"])
+            cat = self._um("categorias", id=prod.get("categoria_id")) if prod.get("categoria_id") else None
+            saida[pid] = dados_de_ranking({
+                "id": pid, "produto_id": prod["id"], "preco_promocional": pr["preco_promocional"],
+                "comissao_pct": pr.get("comissao_pct"), "pontuacao": pr.get("pontuacao"),
+                "classificacao": pr.get("classificacao"), "analise": pr.get("analise"), "origem": pr.get("origem"),
+                "demo": pr.get("demo"),
+                "produtos": dict(prod, marketplaces={"codigo": mkt["codigo"], "modo": mkt["modo"]},
+                                 categorias={"nome": cat["nome"]} if cat else None)})
+        return saida
+
+    def desempenho_publicacoes(self, desde):
+        """Espelho de vw_desempenho_publicacoes."""
+        from .inteligencia.aprendizado import faixa_de_preco, periodo_do_dia
+        pubs = [h for h in self.t["historico"] if h["resultado"] == "sucesso" and not h["demo"] and h["publicado_em"] >= desde]
+        por_oferta: dict[int, int] = {}
+        for h in self.t["historico"]:
+            if h["resultado"] == "sucesso" and not h["demo"]:
+                por_oferta[h["promocao_id"]] = por_oferta.get(h["promocao_id"], 0) + 1
+        vendas: dict[int, list] = {}
+        for c in self.t["comissoes"]:
+            if c.get("status") != "cancelada" and c.get("promocao_id") and c.get("atribuicao") == "oferta_publicada":
+                vendas.setdefault(c["promocao_id"], []).append(float(c["valor_comissao"]))
+        saida = []
+        for h in pubs:
+            canal = self._um("canais", id=h["canal_id"])
+            cat = self._um("categorias", id=h.get("categoria_id")) if h.get("categoria_id") else None
+            local = h["publicado_em"].astimezone(timezone(timedelta(hours=-3)))
+            n = por_oferta.get(h["promocao_id"], 1)
+            cli = [k for k in self.t["cliques"] if k.get("publicacao_id") == h["id"]]
+            v = vendas.get(h["promocao_id"], [])
+            saida.append({"publicacao_id": h["id"], "promocao_id": h["promocao_id"], "publicado_em": h["publicado_em"],
+                          "canal": canal["codigo"], "hora": local.hour, "periodo": periodo_do_dia(local.hour),
+                          "categoria": cat["nome"] if cat else None, "preco_publicado": h.get("preco_publicado"),
+                          "faixa_preco": faixa_de_preco(h.get("preco_publicado")), "experimento_id": h.get("experimento_id"),
+                          "variante": h.get("variante"), "cliques": len(cli),
+                          "cliques_2h": sum(1 for k in cli if k["ocorrido_em"] < h["publicado_em"] + timedelta(hours=2)),
+                          "comissao_atribuida": round(sum(v) / n, 4), "conversoes_atribuidas": round(len(v) / n, 4)})
+        return sorted(saida, key=lambda l: l["publicado_em"], reverse=True)
+
+    def salvar_selecoes(self, decisoes):
+        for d in decisoes:
+            self.t["selecoes"].append({"id": self._id(), "promocao_id": d["promocao_id"], "decidido_em": self.relogio(),
+                                       "selecionada": d["selecionada"], "posicao": d.get("posicao"),
+                                       "prioridade": d.get("prioridade"), "receita_esperada": d.get("receita_esperada"),
+                                       "detalhes": d})
+
+    def salvar_equivalencias(self, achados):
+        for a in achados:
+            atual = self._um("equivalentes", produto_a=a["produto_a"], produto_b=a["produto_b"])
+            if atual:
+                atual.update(a)
+            else:
+                self.t["equivalentes"].append(dict(a, id=self._id(), confirmado=None))
+
+    def experimento_ativo(self):
+        return next((dict(e) for e in self.t["experimentos"] if e.get("ativo")), None)
+
+    def salvar_resultado_experimento(self, experimento_id, resultado):
+        e = self._um("experimentos", id=experimento_id)
+        if e:
+            e.update(resultado=resultado, resultado_em=self.relogio())
+
+    def salvar_resumo_inteligencia(self, tipo, dados):
+        self.t["resumos"] = [r for r in self.t["resumos"] if r["tipo"] != tipo]
+        self.t["resumos"].append({"tipo": tipo, "dados": dados, "calculado_em": self.relogio()})
+
+    # ajuda dos testes: clique único registrado pela função r
+    def registrar_clique_teste(self, publicacao_id: int, quando=None):
+        h = self._um("historico", id=publicacao_id)
+        self.t["cliques"].append({"id": self._id(), "publicacao_id": publicacao_id, "promocao_id": h["promocao_id"],
+                                  "ocorrido_em": quando or self.relogio()})

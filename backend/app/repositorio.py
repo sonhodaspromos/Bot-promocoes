@@ -30,6 +30,9 @@ def agora_iso_menos(minutos: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(minutes=minutos)).isoformat()
 
 
+CAMPOS_OPCIONAIS_PRODUTO = ("gtin", "marca", "modelo", "vendedor_id", "vendedor_nome", "loja_oficial", "estoque")
+
+
 class Repositorio(ABC):
     # ---- leitura de cadastro
     @abstractmethod
@@ -113,7 +116,9 @@ class Repositorio(ABC):
     @abstractmethod
     def dados_publicacao(self, promocao_id: int) -> dict | None: ...
     @abstractmethod
-    def registrar_publicacao(self, item: ItemFila, sucesso: bool, id_mensagem: str | None, erro: str | None) -> None: ...
+    def registrar_publicacao(self, item: ItemFila, sucesso: bool, id_mensagem: str | None, erro: str | None,
+                             extras: dict | None = None) -> None:
+        """extras: experimento_id e variante do teste A/B (opcional)."""
     @abstractmethod
     def publicacoes_desde(self, desde: datetime, tipos: list[str]) -> list[dict]: ...
     @abstractmethod
@@ -164,6 +169,24 @@ class Repositorio(ABC):
     def registrar_importacao(self, dados: dict) -> None: ...
     @abstractmethod
     def ultima_importacao(self, marketplace_id: int, tipo: str) -> datetime | None: ...
+    # ---- inteligência comercial (migration 019; sem ela, tudo devolve "sem dados")
+    @abstractmethod
+    def dados_ranking(self, promocao_ids: list[int]) -> dict[int, dict]:
+        """Por oferta: produto, marketplace, título, preço, comissão (e se é oficial), categoria, faixa,
+        vendedor, estoque, GTIN/marca/modelo e o resumo da análise (pontuação, desconto comprovado)."""
+    @abstractmethod
+    def desempenho_publicacoes(self, desde: datetime) -> list[dict]:
+        """Linhas de vw_desempenho_publicacoes desde a data (vazio sem a migration 019)."""
+    @abstractmethod
+    def salvar_selecoes(self, decisoes: list[dict]) -> None: ...
+    @abstractmethod
+    def salvar_equivalencias(self, achados: list[dict]) -> None: ...
+    @abstractmethod
+    def experimento_ativo(self) -> dict | None: ...
+    @abstractmethod
+    def salvar_resultado_experimento(self, experimento_id: int, resultado: dict) -> None: ...
+    @abstractmethod
+    def salvar_resumo_inteligencia(self, tipo: str, dados: dict) -> None: ...
     @abstractmethod
     def iniciar_execucao(self, origem: str, modo: str, versao: str) -> str: ...
     @abstractmethod
@@ -254,6 +277,11 @@ class SupabaseRepositorio(Repositorio):
             "preco_maximo_variacao": round(oferta.preco_maximo, 2) if oferta.preco_maximo else None,
             "referencia_derivada": bool(oferta.referencia_derivada),
         }
+        # dados opcionais: só gravados quando a loja informou (não apaga o que já se sabia)
+        for campo in CAMPOS_OPCIONAIS_PRODUTO:
+            valor = getattr(oferta, campo, None)
+            if valor is not None:
+                dados[campo] = valor
         existente = self._get("produtos", select="id", marketplace_id=f"eq.{marketplace_id}",
                               id_externo=f"eq.{oferta.id_externo}")
         if existente:
@@ -272,7 +300,11 @@ class SupabaseRepositorio(Repositorio):
             if e.codigo not in ("PGRST204", "42703"):
                 raise
             # banco sem a migration 017: grava sem os campos novos (variação e "preço de" derivado)
-            enxuto = {k: v for k, v in dados.items() if k not in ("preco_maximo_variacao", "referencia_derivada")}
+            novos = ("preco_maximo_variacao", "referencia_derivada") if e.codigo == "PGRST204" and \
+                not any(c in dados for c in CAMPOS_OPCIONAIS_PRODUTO) else ()
+            enxuto = {k: v for k, v in dados.items() if k not in CAMPOS_OPCIONAIS_PRODUTO and k not in novos}
+            if enxuto == dados:
+                enxuto = {k: v for k, v in dados.items() if k not in ("preco_maximo_variacao", "referencia_derivada")}
             return self._req(metodo, "produtos", params=params, corpo=enxuto, prefer=prefer)
 
     def criar_promocao(self, produto_id, oferta, status, origem):
@@ -427,11 +459,18 @@ class SupabaseRepositorio(Repositorio):
             "marketplace_nome,link_id,link_validado,demo,pontuacao,classificacao,analise,produto_id"))
         return linhas[0] if linhas else None
 
-    def registrar_publicacao(self, item, sucesso, id_mensagem, erro):
-        self._req("POST", "historico_publicacoes", prefer="return=minimal", corpo={
-            "fila_id": item.id, "promocao_id": item.promocao_id, "canal_id": item.canal_id,
-            "link_afiliado_id": item.link_afiliado_id, "resultado": "sucesso" if sucesso else "erro",
-            "id_mensagem_externa": id_mensagem, "erro": None if sucesso else (erro or "erro")[:2000]})
+    def registrar_publicacao(self, item, sucesso, id_mensagem, erro, extras=None):
+        corpo = {"fila_id": item.id, "promocao_id": item.promocao_id, "canal_id": item.canal_id,
+                 "link_afiliado_id": item.link_afiliado_id, "resultado": "sucesso" if sucesso else "erro",
+                 "id_mensagem_externa": id_mensagem, "erro": None if sucesso else (erro or "erro")[:2000]}
+        corpo.update({k: v for k, v in (extras or {}).items() if k in ("experimento_id", "variante") and v is not None})
+        try:
+            self._req("POST", "historico_publicacoes", prefer="return=minimal", corpo=corpo)
+        except ErroBanco as e:
+            if e.codigo not in ("PGRST204", "42703") or "variante" not in corpo:
+                raise
+            corpo.pop("experimento_id", None); corpo.pop("variante", None)   # banco sem a migration 019
+            self._req("POST", "historico_publicacoes", prefer="return=minimal", corpo=corpo)
 
     def publicacoes_desde(self, desde, tipos):
         canais = {c["id"]: c["tipo"] for c in self.canais() if c["tipo"] in tipos}
@@ -481,9 +520,21 @@ class SupabaseRepositorio(Repositorio):
         return saida
 
     def historico_precos(self, produto_ids, desde):
+        """Histórico desde `desde` + o último preço ANTES (âncora), para saber o preço no início da janela."""
         if not produto_ids:
             return {}
         saida: dict[int, list[dict]] = {}
+        try:
+            linhas = self._rpc("historico_precos_janela", p_produtos=sorted(set(produto_ids)), p_desde=iso(desde)) or []
+            for h in linhas:
+                saida.setdefault(h["produto_id"], []).append(
+                    {"preco": float(h["preco"]), "disponivel": h["disponivel"], "quando": h["registrado_em"],
+                     "ancora": bool(h.get("ancora"))})
+            return saida
+        except ErroBanco as e:
+            if e.codigo not in ("PGRST202", "42883") and e.status != 404:
+                raise
+            # banco sem a migration 019: sem âncora (janelas que começam antes do 1º registro ficam "insuficientes")
         for h in self._get("historico_precos", select="produto_id,preco,disponivel,registrado_em",
                            produto_id=self._in(sorted(set(produto_ids))), registrado_em=f"gte.{iso(desde)}",
                            order="registrado_em.asc", limit="5000"):
@@ -576,13 +627,91 @@ class SupabaseRepositorio(Repositorio):
                 resultado["atualizados"] += 1
             corpo.append({**i, "marketplace_id": marketplace_id, "origem": "api"})
         if corpo:
-            self._req("POST", "comissoes", params={"on_conflict": "marketplace_id,referencia_externa"},
-                      corpo=corpo, prefer="return=minimal,resolution=merge-duplicates")
+            try:
+                self._req("POST", "comissoes", params={"on_conflict": "marketplace_id,referencia_externa"},
+                          corpo=corpo, prefer="return=minimal,resolution=merge-duplicates")
+            except ErroBanco as e:
+                if e.codigo not in ("PGRST204", "42703"):
+                    raise
+                corpo = [{k: v for k, v in c.items() if k != "id_externo_item"} for c in corpo]  # sem a migration 019
+                self._req("POST", "comissoes", params={"on_conflict": "marketplace_id,referencia_externa"},
+                          corpo=corpo, prefer="return=minimal,resolution=merge-duplicates")
         return resultado
 
     def comissoes_api_periodo(self, marketplace_id, inicio, fim):
         return self._get("comissoes", select="referencia_externa,status,valor_comissao", marketplace_id=f"eq.{marketplace_id}",
                          origem="eq.api", data_venda=f"gte.{inicio}", **{"and": f"(data_venda.lte.{fim})"}, limit="10000")
+
+    # ---------------------------------------------------------------- inteligência comercial (019)
+    def _sem_019(self, e: ErroBanco) -> bool:
+        return e.codigo in ("PGRST205", "PGRST204", "PGRST202", "42P01", "42703", "42883") or e.status == 404
+
+    def dados_ranking(self, promocao_ids):
+        if not promocao_ids:
+            return {}
+        campos = "id,produto_id,preco_promocional,comissao_pct,pontuacao,classificacao,analise,origem,demo,produtos!inner({})"
+        produto = "id,titulo,marca,disponivel,demo,{}marketplaces!inner(codigo,modo),categorias(nome)"
+        try:
+            linhas = self._get("promocoes", select=campos.format(produto.format(
+                "gtin,modelo,loja_oficial,estoque,vendedor_nome,")), id=self._in(promocao_ids))
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+            linhas = self._get("promocoes", select=campos.format(produto.format("")), id=self._in(promocao_ids))
+        return {l["id"]: dados_de_ranking(l) for l in linhas}
+
+    def desempenho_publicacoes(self, desde):
+        try:
+            return self._get("vw_desempenho_publicacoes", publicado_em=f"gte.{iso(desde)}", order="publicado_em.desc",
+                             limit="20000")
+        except ErroBanco as e:
+            if self._sem_019(e):
+                return []
+            raise
+
+    def salvar_selecoes(self, decisoes):
+        if not decisoes:
+            return
+        try:
+            self._req("POST", "selecoes_ofertas", prefer="return=minimal", corpo=[{
+                "promocao_id": d["promocao_id"], "selecionada": d["selecionada"], "posicao": d.get("posicao"),
+                "prioridade": d.get("prioridade"), "receita_esperada": d.get("receita_esperada"), "detalhes": d}
+                for d in decisoes])
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+
+    def salvar_equivalencias(self, achados):
+        if not achados:
+            return
+        try:
+            self._req("POST", "produtos_equivalentes", params={"on_conflict": "produto_a,produto_b"},
+                      prefer="return=minimal,resolution=merge-duplicates", corpo=achados)
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+
+    def experimento_ativo(self):
+        try:
+            linhas = self._get("experimentos", select="id,nome,tipo,amostra_minima,inicio_em", ativo="is.true", limit="1")
+        except ErroBanco as e:
+            if self._sem_019(e):
+                return None
+            raise
+        return linhas[0] if linhas else None
+
+    def salvar_resultado_experimento(self, experimento_id, resultado):
+        self._req("PATCH", "experimentos", params={"id": f"eq.{experimento_id}"}, prefer="return=minimal",
+                  corpo={"resultado": resultado, "resultado_em": iso(agora())})
+
+    def salvar_resumo_inteligencia(self, tipo, dados):
+        try:
+            self._req("POST", "inteligencia_resumos", params={"on_conflict": "tipo"},
+                      prefer="return=minimal,resolution=merge-duplicates",
+                      corpo={"tipo": tipo, "dados": dados, "calculado_em": iso(agora())})
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
 
     def registrar_importacao(self, dados):
         try:
@@ -682,3 +811,23 @@ class SupabaseRepositorio(Repositorio):
             return self._rpc("obter_credencial", p_integracao=integracao, p_nome=nome)
         except ErroBanco:
             return None
+
+
+def dados_de_ranking(l: dict) -> dict:
+    """Converte a linha de promoção (com produto, loja, categoria e análise) no formato do ranking."""
+    from .inteligencia.aprendizado import faixa_de_preco
+    prod = l.get("produtos") or {}
+    mkt = prod.get("marketplaces") or {}
+    analise = l.get("analise") or {}
+    preco = float(l["preco_promocional"]) if l.get("preco_promocional") is not None else None
+    return {
+        "promocao_id": l["id"], "produto_id": l["produto_id"], "marketplace": mkt.get("codigo"),
+        "titulo": prod.get("titulo"), "preco": preco,
+        "comissao_pct": float(l["comissao_pct"]) if l.get("comissao_pct") is not None else None,
+        "dados_confiaveis": mkt.get("modo") == "real" and l.get("origem") == "automatica" and not l.get("demo"),
+        "pontuacao": l.get("pontuacao"), "classificacao": l.get("classificacao"),
+        "desconto_real": analise.get("desconto_real"), "desconto_comprovado": bool(analise.get("desconto_comprovado")),
+        "categoria": (prod.get("categorias") or {}).get("nome"), "faixa_preco": faixa_de_preco(preco),
+        "marca": prod.get("marca"), "gtin": prod.get("gtin"), "modelo": prod.get("modelo"),
+        "loja_oficial": prod.get("loja_oficial"), "estoque": prod.get("estoque"), "origem": l.get("origem"),
+    }

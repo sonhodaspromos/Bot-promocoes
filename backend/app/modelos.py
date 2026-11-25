@@ -23,6 +23,14 @@ class OfertaEncontrada:
     demo: bool = False
     preco_maximo: float | None = None       # maior preço entre as variações (cor, tamanho...), se a loja informar
     referencia_derivada: bool = False       # "preço de" calculado a partir de uma taxa de desconto (não é um preço visto)
+    # dados opcionais: None = a loja não informou (nunca preenchidos com suposição)
+    gtin: str | None = None
+    marca: str | None = None
+    modelo: str | None = None
+    vendedor_id: str | None = None
+    vendedor_nome: str | None = None
+    loja_oficial: bool | None = None
+    estoque: int | None = None
 
     @property
     def desconto_pct(self) -> float:

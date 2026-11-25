@@ -17,6 +17,7 @@ import statistics
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from .precos import resumir as resumir_precos
 from .regras import Regras
 
 EXCELENTE, BOA, NAO_RECOMENDADA = "excelente", "boa", "nao_recomendada"
@@ -95,6 +96,7 @@ class ResultadoAnalise:
     pontuacao_sem_bloqueio: int
     analisado_em: str
     desconto_comprovado: bool = False
+    historico_precos: dict | None = None       # 7/30/90 dias, menor preço, desconto artificial, sem dados
 
     @property
     def rotulo(self) -> str:
@@ -161,8 +163,25 @@ def analisar(e: EntradaAnalise, regras: Regras | None = None, agora: datetime | 
         bloqueios.append(f"Preço diferente entre as variações do produto ({_reais(e.preco)} a "
                          f"{_reais(e.preco_maximo_variacao)}): o post mostraria um preço que nem todas as opções têm")
 
-    # ------------------------------------------------ 3. desconto real
+    # ------------------------------------------------ 3. histórico 7/30/90, menor preço, desconto artificial
+    resumo = resumir_precos(e.historico, agora, e.preco if e.preco and e.preco > 0 else None,
+                            e.preco_referencia if not e.desconto_por_cupom else None,
+                            cobertura_minima_pct=r.historico_cobertura_minima_pct,
+                            alta_artificial_pct=r.alta_artificial_pct)
+    for texto in resumo.desconto_artificial:
+        if resumo.artificial_bloqueante and r.bloquear_desconto_artificial and "subiu" in texto:
+            bloqueios.append("Desconto artificial: " + texto)
+        else:
+            alertas.append("Desconto anunciado pela loja é artificial: " + texto
+                           + " (o desconto divulgado é recalculado pelo histórico)")
+    # ------------------------------------------------ 4. desconto real
     comp_desc, desconto_real, base = _desconto(e, r, agora, bloqueios, alertas, motivos)
+    for s in resumo.sinais:
+        if s.startswith("Menor preço"):
+            if not any(m.startswith("Menor preço") for m in motivos):   # sem repetir o motivo do quesito desconto
+                motivos.append(s)
+        elif not any(s.split(" (")[0] in a for a in alertas):
+            alertas.append(s)
     comprovado = desconto_real is not None and (comp_desc.confiabilidade >= 0.9 or e.desconto_por_cupom)
     if desconto_real is not None and r.exigir_desconto_comprovado and not comprovado:
         bloqueios.append(f"Desconto não comprovado ({base}): só divulgamos desconto confirmado pelo histórico de "
@@ -211,7 +230,8 @@ def analisar(e: EntradaAnalise, regras: Regras | None = None, agora: datetime | 
         pontuacao=pontuacao, classificacao=classificacao, confianca=max(0, min(100, confianca)),
         desconto_real=round(desconto_real, 2) if desconto_real is not None else None, base_desconto=base,
         componentes=componentes, bloqueios=bloqueios, alertas=alertas, motivos=motivos,
-        pontuacao_sem_bloqueio=pontuacao_sem_bloqueio, analisado_em=agora.isoformat(), desconto_comprovado=comprovado)
+        pontuacao_sem_bloqueio=pontuacao_sem_bloqueio, analisado_em=agora.isoformat(), desconto_comprovado=comprovado,
+        historico_precos=resumo.como_dict())
 
 
 # =========================================================================== quesitos
