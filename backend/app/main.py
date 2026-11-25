@@ -94,6 +94,33 @@ def cmd_testar(args, log: Log) -> int:
     return 1 if falhou else 0
 
 
+def cmd_modulo(args, log: Log) -> int:
+    """vitrine | alertas | whatsapp: executa um módulo agora (respeita as flags recursos.*)."""
+    from .modulos import Modulos
+    config, repo, integ, amb = _montar_real(log)
+    cfg = repo.configuracoes()
+    m = Modulos(repo, integ, log, config.supabase_url, amb)
+    r = {"vitrine": m.vitrine, "alertas": m.alertas, "whatsapp": m.whatsapp}[args.comando](cfg)
+    print(r)
+    return 0
+
+
+def cmd_worker(args, log: Log) -> int:
+    """Worker independente da fila de tarefas (vários podem rodar em paralelo)."""
+    from .modulos import Modulos
+    from .worker import Worker
+    config, repo, integ, amb = _montar_real(log)
+    handlers = Modulos(repo, integ, log, config.supabase_url, amb).handlers()
+    tipos = [t for t in (args.tipos.split(",") if args.tipos else handlers) if t in handlers]
+    r = Worker(repo, {t: handlers[t] for t in tipos}, log).rodar(max_tarefas=args.max)
+    print(r)
+    try:
+        repo.gravar_logs(None, log.retirar_pendentes())
+    except Exception:
+        pass
+    return 1 if r["falhas"] else 0
+
+
 def cmd_comissoes(args, log: Log) -> int:
     config, repo, integ, _ = _montar_real(log)
     from .servicos.comissoes import ServicoComissoes
@@ -155,13 +182,19 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--imgbb", action="store_true", help="envia 1 imagem de teste de 1 pixel ao ImgBB (expira em 60 s)")
     v.add_argument("--link", help="link de afiliado para conferir a atribuição")
     sub.add_parser("arte-exemplo")
+    for nome in ("vitrine", "alertas", "whatsapp"):
+        sub.add_parser(nome, help=f"executa o módulo {nome} agora (feature flag recursos.* precisa estar ligada)")
+    w = sub.add_parser("worker", help="consome a fila persistente de tarefas")
+    w.add_argument("--tipos", help="ex.: vitrine.gerar,alertas.processar (padrão: todos)")
+    w.add_argument("--max", type=int, default=50)
     args = p.parse_args(argv)
     if not args.comando:
         args = p.parse_args(["rodar"])
 
     log = Log()
     comandos = {"rodar": cmd_rodar, "simular": cmd_simular, "testar-integracoes": cmd_testar,
-                "comissoes": cmd_comissoes, "arte-exemplo": cmd_arte, "validar-integracoes": cmd_validar}
+                "comissoes": cmd_comissoes, "arte-exemplo": cmd_arte, "validar-integracoes": cmd_validar,
+                "vitrine": cmd_modulo, "alertas": cmd_modulo, "whatsapp": cmd_modulo, "worker": cmd_worker}
     try:
         return comandos[args.comando](args, log)
     except ErroConfiguracao as e:

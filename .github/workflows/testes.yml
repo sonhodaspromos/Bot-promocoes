@@ -90,7 +90,7 @@ jobs:
         with:
           node-version: "22"
       - name: Regras das Edge Functions (IP confiável, robôs, sal, redirecionamento, 2º fator)
-        run: node --experimental-strip-types --test supabase/functions/testes/regras.test.ts
+        run: node --experimental-strip-types --test supabase/functions/testes/*.test.ts
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

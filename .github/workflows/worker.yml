@@ -1,0 +1,65 @@
+name: Worker de módulos
+
+# Consome a fila persistente (tabela tarefas) — só faz algo com recursos.workers ligado no painel.
+# Grupo de concorrência próprio: não disputa com a rodada do bot. Tarefas usam trava com prazo
+# (FOR UPDATE SKIP LOCKED), então duas execuções simultâneas não pegam a mesma tarefa.
+on:
+  schedule:
+    - cron: "5-59/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-modulos
+  cancel-in-progress: false
+
+jobs:
+  worker:
+    if: vars.WORKERS_ATIVOS == 'sim'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Processar fila
+        run: python -m app.main worker --max 50
+        env:
+          AMBIENTE: ${{ vars.AMBIENTE }}
+          INTEGRACOES_ATIVAS: ${{ vars.INTEGRACOES_ATIVAS }}
+          RECURSOS_DESLIGADOS: ${{ vars.RECURSOS_DESLIGADOS }}
+          VITRINE_SAIDA: ${{ github.workspace }}/vitrine
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CANAL: ${{ secrets.TELEGRAM_CANAL }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          WHATSAPP_PHONE_ID: ${{ secrets.WHATSAPP_PHONE_ID }}
+          WHATSAPP_TEMPLATE: ${{ secrets.WHATSAPP_TEMPLATE }}
+      # Publicação da vitrine: opcional e desligada por padrão (variável VITRINE_PUBLICAR=sim).
+      - name: Enviar vitrine para o GitHub Pages
+        if: vars.VITRINE_PUBLICAR == 'sim' && hashFiles('vitrine/index.html') != ''
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: vitrine
+
+  publicar-vitrine:
+    needs: worker
+    if: vars.VITRINE_PUBLICAR == 'sim'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/deploy-pages@v4

@@ -49,12 +49,20 @@ class Orquestrador:
         self.inteligencia = inteligencia or ServicoInteligencia(repo, log)
         self.cupons = cupons or ServicoCupons(repo, integ.fontes, self.publicacao, log)
         self.prazo, self.cronometro = prazo_segundos, cronometro
+        from .modulos import Modulos
+        self.modulos = Modulos(repo, integ, log, url_supabase, ambiente)
 
     def sincronizar_modos(self) -> None:
         """Deixa o banco com o mesmo modo (real/demo/desativado) das integrações em uso."""
         shopee_real = "shopee" in self.integ.fontes and self.integ.fontes["shopee"].modo == "real"
         producao = bool(self.ambiente and self.ambiente.producao)
         self.repo.definir_modo("marketplaces", "shopee", "real" if shopee_real else ("desativado" if producao else "demo"))
+        for codigo in ("aliexpress", "amazon"):   # APIs novas: só "real" com credenciais e INTEGRACOES_ATIVAS
+            fonte = self.integ.fontes.get(codigo)
+            try:
+                self.repo.definir_modo("marketplaces", codigo, "real" if fonte is not None and fonte.modo == "real" else "desativado")
+            except Exception:
+                pass   # banco sem a migration 020
         for codigo, canal in self.integ.canais.items():
             self.repo.definir_modo("canais", codigo, canal.modo)
         if producao:  # canal sem integração ativa: desativado, nunca "demo" escondido em produção
@@ -100,6 +108,12 @@ class Orquestrador:
             cfg.update(self.repo.configuracoes())
             if self.ambiente is not None:
                 cfg.update(self.ambiente.ajustar(cfg))
+            try:
+                extras = self.modulos.montar_canais_extras(cfg)
+                if extras:
+                    self.log.info("bot", f"Canais extras por categoria: {', '.join(extras)}")
+            except Exception as e:  # módulo novo nunca derruba a rodada
+                self.log.aviso("bot", "Canais extras indisponíveis", erro=f"{type(e).__name__}: {e}")
 
         def monitorar():
             resumo.verificadas = self.monitor.executar(cfg)
@@ -130,6 +144,9 @@ class Orquestrador:
         def experimentos():
             self.publicacao.selecao.avaliar_experimento()
 
+        def modulos():
+            resumo.modulos = self.modulos.executar(cfg)
+
         def cupons():
             r = self.cupons.executar(cfg)
             resumo.campanhas, resumo.sugestoes_cupom, resumo.cupons_publicados = r["campanhas"], r["sugestoes"], r["cupons_publicados"]
@@ -137,7 +154,7 @@ class Orquestrador:
         etapas = [("configuração", carregar), ("modos", self.sincronizar_modos), ("monitor", monitorar),
                   ("encerrar pausadas", encerrar), ("comissões", importar), ("busca", buscar),
                   ("validação de links", validar), ("inteligência", analisar), ("fila", enfileirar), ("publicação", publicar),
-                  ("cupons", cupons), ("testes A/B", experimentos)]
+                  ("cupons", cupons), ("testes A/B", experimentos), ("módulos", modulos)]
         for nome, funcao in etapas:
             etapa(nome, funcao)
 

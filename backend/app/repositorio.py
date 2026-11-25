@@ -80,7 +80,8 @@ class Repositorio(ABC):
     @abstractmethod
     def promocoes_para_enfileirar(self, limite: int) -> list[dict]: ...
     @abstractmethod
-    def enfileirar(self, promocao_id: int, canal_id: int, link_id: int, prioridade: int = 5) -> bool: ...
+    def enfileirar(self, promocao_id: int, canal_id: int, link_id: int, prioridade: int = 5,
+                   agendado_para: datetime | None = None) -> bool: ...
     @abstractmethod
     def pegar_fila(self, limite: int) -> list[ItemFila]: ...
     @abstractmethod
@@ -187,6 +188,29 @@ class Repositorio(ABC):
     def salvar_resultado_experimento(self, experimento_id: int, resultado: dict) -> None: ...
     @abstractmethod
     def salvar_resumo_inteligencia(self, tipo: str, dados: dict) -> None: ...
+    # ---- expansão modular (migration 020). Implementações nas duas classes; sem a 020, ErroBanco.
+    def salvar_configuracao(self, chave: str, valor) -> None: raise NotImplementedError
+    def canais_categorias(self) -> dict[int, list[int]]: raise NotImplementedError
+    def ultimo_agendado(self, canal_id: int) -> datetime | None: raise NotImplementedError
+    def tarefa_enfileirar(self, tipo: str, payload: dict, chave: str | None = None, agendar_para: datetime | None = None) -> int | None: raise NotImplementedError
+    def tarefas_pegar(self, tipos: list[str], limite: int, bloqueio_min: int, worker: str) -> list[dict]: raise NotImplementedError
+    def tarefa_concluir(self, tarefa_id: int, ok: bool, erro: str | None, resultado: dict | None, worker: str) -> bool: raise NotImplementedError
+    def ofertas_vitrine(self, dias: int = 7) -> list[dict]: raise NotImplementedError
+    def cupons_vitrine(self) -> list[dict]: raise NotImplementedError
+    def ofertas_publicadas_desde(self, desde: datetime) -> list[dict]: raise NotImplementedError
+    def criar_alerta(self, chat_id: int, termo: str, preco_maximo: float | None) -> None: raise NotImplementedError
+    def alertas_da_pessoa(self, chat_id: int) -> list[dict]: raise NotImplementedError
+    def apagar_alerta(self, alerta_id: int) -> None: raise NotImplementedError
+    def alertas_apagar_tudo(self, chat_id: int) -> None: raise NotImplementedError
+    def alertas_ativos(self) -> list[dict]: raise NotImplementedError
+    def registrar_aviso(self, alerta_id: int, promocao_id: int) -> bool: raise NotImplementedError
+    def avisos_hoje_por_pessoa(self) -> dict[int, int]: raise NotImplementedError
+    def whatsapp_destinatarios(self, categoria_id: int | None, max_dia: int, promocao_id: int) -> list[dict]: raise NotImplementedError
+    def whatsapp_reservar(self, inscrito_id: int, promocao_id: int) -> bool: raise NotImplementedError
+    def whatsapp_gasto_hoje(self) -> float: raise NotImplementedError
+    def whatsapp_evento(self, inscrito_id: int | None, tipo: str, custo: float | None, detalhe: str | None) -> None: raise NotImplementedError
+    def whatsapp_inscrever(self, telefone: str, origem: str, texto: str, categorias: list[int] | None = None) -> int: raise NotImplementedError
+    def whatsapp_descadastrar(self, telefone: str) -> bool: raise NotImplementedError
     @abstractmethod
     def iniciar_execucao(self, origem: str, modo: str, versao: str) -> str: ...
     @abstractmethod
@@ -391,7 +415,7 @@ class SupabaseRepositorio(Repositorio):
     # ------------------------------------------------------------ publicação
     def promocoes_para_enfileirar(self, limite):
         linhas = self._get("vw_promocoes_painel",
-                           select="id,produto_id,link_id,desconto_pct,demo,marketplace,origem,pontuacao,classificacao",
+                           select="id,produto_id,link_id,desconto_pct,demo,marketplace,origem,pontuacao,classificacao,categoria_id",
                            status="eq.aprovada", link_validado="is.true", classificacao="in.(excelente,boa)",
                            order="pontuacao.desc,desconto_pct.desc", limit=str(limite * 3))
         if not linhas:
@@ -401,10 +425,12 @@ class SupabaseRepositorio(Repositorio):
             status="in.(pendente,processando)")}
         return [l for l in linhas if l["id"] not in na_fila][:limite]
 
-    def enfileirar(self, promocao_id, canal_id, link_id, prioridade=5):
+    def enfileirar(self, promocao_id, canal_id, link_id, prioridade=5, agendado_para=None):
+        corpo = {"promocao_id": promocao_id, "canal_id": canal_id, "link_afiliado_id": link_id, "prioridade": prioridade}
+        if agendado_para is not None:
+            corpo["agendado_para"] = iso(agendado_para)
         try:
-            self._req("POST", "fila_publicacoes", prefer="return=minimal", corpo={
-                "promocao_id": promocao_id, "canal_id": canal_id, "link_afiliado_id": link_id, "prioridade": prioridade})
+            self._req("POST", "fila_publicacoes", prefer="return=minimal", corpo=corpo)
         except ErroBanco as e:
             if e.codigo == "23505" or isinstance(e, RegraViolada):
                 return False
@@ -703,6 +729,95 @@ class SupabaseRepositorio(Repositorio):
     def salvar_resultado_experimento(self, experimento_id, resultado):
         self._req("PATCH", "experimentos", params={"id": f"eq.{experimento_id}"}, prefer="return=minimal",
                   corpo={"resultado": resultado, "resultado_em": iso(agora())})
+
+    # ---------------------------------------------------------------- expansão modular (020)
+    def salvar_configuracao(self, chave, valor):
+        self._req("PATCH", "configuracoes", params={"chave": f"eq.{chave}"}, prefer="return=minimal", corpo={"valor": valor})
+
+    def canais_categorias(self):
+        saida: dict[int, list[int]] = {}
+        try:
+            for l in self._get("canais_categorias", select="canal_id,categoria_id"):
+                saida.setdefault(l["canal_id"], []).append(l["categoria_id"])
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+        return saida
+
+    def ultimo_agendado(self, canal_id):
+        v = self._rpc("ultimo_agendado", p_canal=canal_id)
+        return datetime.fromisoformat(v.replace("Z", "+00:00")) if isinstance(v, str) else None
+
+    def tarefa_enfileirar(self, tipo, payload, chave=None, agendar_para=None):
+        return self._rpc("tarefa_enfileirar", p_tipo=tipo, p_payload=payload, p_chave=chave,
+                         p_agendar_para=iso(agendar_para or agora()))
+
+    def tarefas_pegar(self, tipos, limite, bloqueio_min, worker):
+        return self._rpc("tarefas_pegar", p_tipos=list(tipos), p_limite=limite, p_bloqueio_min=bloqueio_min, p_worker=worker) or []
+
+    def tarefa_concluir(self, tarefa_id, ok, erro, resultado, worker):
+        return self._rpc("tarefa_concluir", p_id=tarefa_id, p_ok=ok, p_erro=erro, p_resultado=resultado, p_worker=worker) is True
+
+    def ofertas_vitrine(self, dias=7):
+        return [dict(l, preco=float(l["preco"]), preco_referencia=float(l["preco_referencia"]) if l.get("preco_referencia") else None,
+                     desconto_pct=float(l["desconto_pct"]) if l.get("desconto_pct") is not None else None)
+                for l in self._rpc("ofertas_vitrine", p_dias=dias) or []]
+
+    def cupons_vitrine(self):
+        return [{"titulo": c["titulo"], "codigo": c.get("codigo"), "condicoes": c.get("regras"),
+                 "fim_em": (c.get("fim_em") or "")[:10], "marketplace_nome": c.get("marketplace_nome")}
+                for c in self._rpc("cupons_vitrine") or []]
+
+    def ofertas_publicadas_desde(self, desde):
+        return self._rpc("ofertas_publicadas_desde", p_desde=iso(desde)) or []
+
+    def criar_alerta(self, chat_id, termo, preco_maximo):
+        self._req("POST", "alertas_preco", prefer="return=minimal",
+                  corpo={"telegram_chat_id": chat_id, "termo": termo, "preco_maximo": preco_maximo})
+
+    def alertas_da_pessoa(self, chat_id):
+        return self._get("alertas_preco", select="id,termo,preco_maximo", telegram_chat_id=f"eq.{chat_id}",
+                         ativo="is.true", order="id.asc")
+
+    def apagar_alerta(self, alerta_id):
+        self._req("DELETE", "alertas_preco", params={"id": f"eq.{alerta_id}"}, prefer="return=minimal")
+
+    def alertas_apagar_tudo(self, chat_id):
+        self._req("DELETE", "alertas_preco", params={"telegram_chat_id": f"eq.{chat_id}"}, prefer="return=minimal")
+
+    def alertas_ativos(self):
+        return self._get("alertas_preco", select="id,telegram_chat_id,termo,preco_maximo", ativo="is.true", limit="10000")
+
+    def registrar_aviso(self, alerta_id, promocao_id):
+        try:
+            self._req("POST", "alertas_avisos", prefer="return=minimal", corpo={"alerta_id": alerta_id, "promocao_id": promocao_id})
+            return True
+        except ErroBanco as e:
+            if e.codigo == "23505":
+                return False
+            raise
+
+    def avisos_hoje_por_pessoa(self):
+        return {int(l["telegram_chat_id"]): int(l["avisos"]) for l in self._rpc("alertas_avisos_hoje") or []}
+
+    def whatsapp_destinatarios(self, categoria_id, max_dia, promocao_id):
+        return self._rpc("whatsapp_destinatarios", p_categoria=categoria_id, p_max_dia=max_dia, p_promocao=promocao_id) or []
+
+    def whatsapp_reservar(self, inscrito_id, promocao_id):
+        return self._rpc("whatsapp_reservar", p_inscrito=inscrito_id, p_promocao=promocao_id) is True
+
+    def whatsapp_gasto_hoje(self):
+        return float(self._rpc("whatsapp_gasto_hoje") or 0)
+
+    def whatsapp_evento(self, inscrito_id, tipo, custo, detalhe):
+        self._req("POST", "whatsapp_eventos", prefer="return=minimal",
+                  corpo={"inscrito_id": inscrito_id, "tipo": tipo, "custo_usd": custo, "detalhe": (detalhe or "")[:300] or None})
+
+    def whatsapp_inscrever(self, telefone, origem, texto, categorias=None):
+        return self._rpc("whatsapp_inscrever", p_telefone=telefone, p_origem=origem, p_texto=texto, p_categorias=categorias or [])
+
+    def whatsapp_descadastrar(self, telefone):
+        return self._rpc("whatsapp_descadastrar", p_telefone=telefone) is True
 
     def salvar_resumo_inteligencia(self, tipo, dados):
         try:

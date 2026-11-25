@@ -102,6 +102,8 @@ def _servidor(url: str) -> str:
 
 # ------------------------------------------------------------------------ validação somente leitura
 TELEGRAM_LEITURA = {"getMe", "getChat", "getChatMember", "getChatAdministrators"}
+ALIEXPRESS_LEITURA = {"aliexpress.affiliate.product.query", "aliexpress.affiliate.productdetail.get",
+                      "aliexpress.affiliate.order.list", "aliexpress.affiliate.category.get"}
 
 
 def chamada_de_leitura(metodo: str, url: str, kwargs: dict, permitir_envio_imgbb: bool = False) -> bool:
@@ -126,6 +128,14 @@ def chamada_de_leitura(metodo: str, url: str, kwargs: dict, permitir_envio_imgbb
         except ValueError:
             consulta = texto
         return not str(consulta).lstrip().lower().startswith("mutation")
+    if host == "api-sg.aliexpress.com":   # gateway oficial: só os métodos de LEITURA do programa de afiliados
+        corpo = kwargs.get("data") or {}
+        return isinstance(corpo, dict) and corpo.get("method") in ALIEXPRESS_LEITURA
+    if caminho.endswith(("/searchItems", "/getItems")):   # Amazon Creators API: consultas
+        return True
+    corpo = kwargs.get("data")
+    if isinstance(corpo, dict) and corpo.get("grant_type") == "client_credentials":   # token OAuth (não altera nada)
+        return True
     if host == "api.imgbb.com":
         return permitir_envio_imgbb  # não existe consulta de leitura no ImgBB: só um envio de teste autorizado
     return False

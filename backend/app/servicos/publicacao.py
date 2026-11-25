@@ -37,6 +37,7 @@ from ..rede import ImagemRecusada, baixar_imagem
 from .comum import agora_utc, ajuste, dentro_do_horario, fuso, inicio_do_dia, num
 from .validacao import LinkTemporariamenteIndisponivel, validar_link
 from ..requisitos import faltando_para_publicar
+from ..recursos import ligado
 from ..inteligencia.experimentos import atribuir as atribuir_variante
 
 CANAIS_POR_OFERTA = ("telegram", "instagram_story")  # o feed recebe só a oferta imperdível do dia
@@ -110,15 +111,60 @@ class ServicoPublicacao:
                 selecionadas += self._selecionar(automaticas, quantas, cfg)
 
         n = 0
+        alvos, regras = self._canais_alvo(cfg, canais)
+        agendar = ligado(cfg, "agendamento_inteligente")
+        ultimos: dict[int, datetime | None] = {}
         for promo in selecionadas:
-            for codigo in CANAIS_POR_OFERTA:
+            for codigo in alvos:
                 canal = canais.get(codigo)
-                if canal and self._pode_ir(promo, codigo, canal["id"], cfg) and not self._saturado(promo, codigo, cfg):
+                if not canal or not self._categoria_permitida(promo, canal["id"], regras):
+                    continue
+                if self._pode_ir(promo, codigo, canal["id"], cfg) and not self._saturado(promo, codigo, cfg):
                     prioridade = 1 if promo.get("origem") == "manual" else 5
-                    if self.repo.enfileirar(promo["id"], canal["id"], promo["link_id"], prioridade):
+                    quando = None
+                    if agendar and promo.get("origem") != "manual":
+                        quando = self._agendar(cfg, agora, canal["id"], ultimos)
+                    if self.repo.enfileirar(promo["id"], canal["id"], promo["link_id"], prioridade,
+                                            *((quando,) if quando else ())):
                         n += 1
+                        if quando:
+                            ultimos[canal["id"]] = quando
         n += self._enfileirar_feed(cfg, agora, canais)
         return n
+
+    def _canais_alvo(self, cfg: dict, canais: dict) -> tuple[list[str], dict[int, list[int]]]:
+        """Padrão: telegram + story. Com recursos.canais_por_categoria: também os canais extras de Telegram
+        cadastrados (ex.: telegram_casa) e as regras de categoria de cada canal."""
+        if not ligado(cfg, "canais_por_categoria"):
+            return list(CANAIS_POR_OFERTA), {}
+        extras = [c for c, row in canais.items() if c not in CANAIS_POR_OFERTA and c != "instagram_feed"
+                  and row.get("tipo") == "telegram"]
+        try:
+            regras = self.repo.canais_categorias()
+        except ErroBanco as e:
+            self.log.aviso("publicacao", "Regras de canais por categoria indisponíveis; uso todos os canais", erro=str(e))
+            regras = {}
+        return list(CANAIS_POR_OFERTA) + sorted(extras), regras
+
+    @staticmethod
+    def _categoria_permitida(promo: dict, canal_id: int, regras: dict[int, list[int]]) -> bool:
+        permitidas = regras.get(canal_id)
+        return not permitidas or promo.get("categoria_id") in permitidas
+
+    def _agendar(self, cfg: dict, agora, canal_id: int, ultimos: dict):
+        from .agendamento import proximo_horario
+        if canal_id not in ultimos:
+            try:
+                ultimos[canal_id] = self.repo.ultimo_agendado(canal_id)
+            except ErroBanco:
+                ultimos[canal_id] = None
+        try:
+            ap, _ = self.selecao.contexto(cfg)
+        except Exception:
+            ap = None
+        h = proximo_horario(cfg, agora, ultimos[canal_id], ap)
+        self.log.info("agendamento", f"Canal {canal_id}: post agendado para {h.quando.isoformat()} ({h.explicacao})")
+        return h.quando
 
     def _selecionar(self, automaticas: list[dict], quantas: int, cfg: dict) -> list[dict]:
         """Ranking comercial (receita esperada sem sacrificar qualidade) com explicação de cada decisão.

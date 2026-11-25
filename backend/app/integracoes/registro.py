@@ -27,6 +27,7 @@ from .imagens.imgbb import ImgBB
 class Integracoes:
     fontes: dict[str, FonteOfertas] = field(default_factory=dict)
     canais: dict[str, CanalPublicacao] = field(default_factory=dict)
+    whatsapp: object | None = None          # ClienteWhatsApp (só produção, com credenciais e INTEGRACOES_ATIVAS)
 
     @property
     def modo_geral(self) -> str:
@@ -78,7 +79,8 @@ def _montar_por_ambiente(config: Config, ordenacao: int, amb: Ambiente) -> Integ
     if config.forcar_demo:
         raise ErroConfiguracao(f"Conflito: AMBIENTE={amb.nome} com MODO_DEMO ligado. Remova MODO_DEMO.")
 
-    exigidas = {"shopee": ["shopee"], "telegram": ["telegram"], "instagram": ["instagram", "imgbb"]}
+    exigidas = {"shopee": ["shopee"], "telegram": ["telegram"], "instagram": ["instagram", "imgbb"],
+                "aliexpress": ["aliexpress"], "amazon": ["amazon"], "whatsapp": ["whatsapp"]}
     faltando = [c for i in amb.ativas for c in exigidas[i] if config.modo(c) != REAL]
     if faltando:
         raise ErroConfiguracao(
@@ -90,6 +92,18 @@ def _montar_por_ambiente(config: Config, ordenacao: int, amb: Ambiente) -> Integ
         integ.fontes["shopee"] = ShopeeFonte(config.credencial("shopee", "APP_ID"), config.credencial("shopee", "SECRET"),
                                              ClienteHTTP("shopee", timeout=t), ordenacao=ordenacao)
     integ.fontes["mercado_livre"] = ManualFonte("mercado_livre")
+    integ.fontes["magalu"] = ManualFonte("magalu")   # sem API pública de afiliados: cadastro pelo painel
+    if "aliexpress" in amb.ativas:
+        from .fontes.aliexpress import AliExpressFonte
+        integ.fontes["aliexpress"] = AliExpressFonte(
+            config.credencial("aliexpress", "APP_KEY"), config.credencial("aliexpress", "APP_SECRET"),
+            config.credencial("aliexpress", "TRACKING_ID"), ClienteHTTP("aliexpress", timeout=t))
+    if "amazon" in amb.ativas:
+        from .fontes.amazon import AmazonFonte
+        integ.fontes["amazon"] = AmazonFonte(
+            config.credencial("amazon", "CREDENTIAL_ID"), config.credencial("amazon", "CREDENTIAL_SECRET"),
+            config.credencial("amazon", "PARTNER_TAG"), config.credencial("amazon", "TOKEN_URL"),
+            config.credencial("amazon", "API_URL"), ClienteHTTP("amazon", timeout=t))
 
     if amb.nome == "homologacao":  # nunca publica de verdade, nem com token configurado
         integ.canais = {c: DemoCanal(c) for c in ("telegram", "instagram_story", "instagram_feed")}
@@ -104,6 +118,10 @@ def _montar_por_ambiente(config: Config, ordenacao: int, amb: Ambiente) -> Integ
             integ.canais[f"instagram_{tipo}"] = InstagramCanal(
                 tipo, config.credencial("instagram", "TOKEN"), config.credencial("instagram", "USER_ID"),
                 hospedagem, ClienteHTTP("instagram", timeout=t))
+    if "whatsapp" in amb.ativas:
+        from ..servicos.whatsapp import ClienteWhatsApp
+        integ.whatsapp = ClienteWhatsApp(config.credencial("whatsapp", "TOKEN"), config.credencial("whatsapp", "PHONE_ID"),
+                                         config.credencial("whatsapp", "TEMPLATE"), ClienteHTTP("whatsapp", timeout=t))
     return integ
 
 
@@ -185,6 +203,37 @@ def montar_validacao(config: Config, amb: Ambiente, ordenacao: int = 2, *,
         if obrig and config.modo("imgbb") != REAL:
             alvos.append(sem_credencial("imgbb", True, ["IMGBB_KEY"]))
 
+    # AliExpress e Amazon (APIs oficiais de afiliados) e WhatsApp (Cloud API) — somente leitura
+    from .fontes.aliexpress import AliExpressFonte
+    from .fontes.amazon import AmazonFonte
+    from ..servicos.whatsapp import ClienteWhatsApp
+    fabricas = {
+        "aliexpress": (["ALIEXPRESS_APP_KEY", "ALIEXPRESS_APP_SECRET", "ALIEXPRESS_TRACKING_ID"], lambda: AliExpressFonte(
+            config.credencial("aliexpress", "APP_KEY"), config.credencial("aliexpress", "APP_SECRET"),
+            config.credencial("aliexpress", "TRACKING_ID"), ro("aliexpress"))),
+        "amazon": (["AMAZON_CREDENTIAL_ID", "AMAZON_CREDENTIAL_SECRET", "AMAZON_PARTNER_TAG", "AMAZON_TOKEN_URL",
+                    "AMAZON_API_URL"], lambda: AmazonFonte(
+            config.credencial("amazon", "CREDENTIAL_ID"), config.credencial("amazon", "CREDENTIAL_SECRET"),
+            config.credencial("amazon", "PARTNER_TAG"), config.credencial("amazon", "TOKEN_URL"),
+            config.credencial("amazon", "API_URL"), ro("amazon"))),
+        "whatsapp": (["WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID", "WHATSAPP_TEMPLATE"], lambda: ClienteWhatsApp(
+            config.credencial("whatsapp", "TOKEN"), config.credencial("whatsapp", "PHONE_ID"),
+            config.credencial("whatsapp", "TEMPLATE"), ro("whatsapp"))),
+    }
+    for nome, (vars_, fabrica) in fabricas.items():
+        obrig = nome in amb.ativas
+        if config.modo(nome) == REAL:
+            try:
+                alvos.append(AlvoValidacao(nome, "real", obrig, fabrica()))
+            except ErroConfiguracao as e:
+                alvos.append(AlvoValidacao(nome, "real", obrig, None, str(e)))
+            except Exception as e:  # ex.: URL da Amazon que não é https
+                alvos.append(AlvoValidacao(nome, "real", obrig, None, f"configuração inválida: {e}"))
+        else:
+            alvos.append(sem_credencial(nome, obrig, vars_))
+
     alvos.append(AlvoValidacao("mercado_livre", "manual", False, ManualFonte("mercado_livre"),
-                               "fonte manual: ofertas cadastradas no painel (sem API); não entra na aprovação"))
+                               "fonte manual: ofertas cadastradas no painel (sem API de afiliados); não entra na aprovação"))
+    alvos.append(AlvoValidacao("magalu", "manual", False, ManualFonte("magalu"),
+                               "fonte manual: o programa Parceiro Magalu não oferece API pública de afiliados"))
     return alvos

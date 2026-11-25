@@ -41,7 +41,10 @@ class ServicoBusca:
         aprovar_direto = not bool(ajuste(cfg, "publicacao.aprovacao_manual"))
         encontradas = novas = 0
 
+        from ..recursos import ligado
         for fonte in self.fontes.values():
+            if fonte.codigo in ("amazon", "aliexpress") and not ligado(cfg, f"fonte_{fonte.codigo}"):
+                continue   # módulo novo: só busca com a flag ligada (além das credenciais)
             if not fonte.suporta_busca:
                 continue
             mkt = marketplaces.get(fonte.codigo)

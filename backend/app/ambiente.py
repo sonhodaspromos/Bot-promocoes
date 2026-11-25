@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from .erros import ErroConfiguracao
 
 AMBIENTES = ("demonstracao", "homologacao", "producao")
-INTEGRACOES = ("shopee", "telegram", "instagram")
+INTEGRACOES = ("shopee", "telegram", "instagram", "aliexpress", "amazon", "whatsapp")
 CANAIS_DA_INTEGRACAO = {"telegram": ["telegram"], "instagram": ["instagram_story", "instagram_feed"]}
 
 

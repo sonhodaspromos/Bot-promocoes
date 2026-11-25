@@ -51,13 +51,17 @@ class MemoriaRepositorio(Repositorio):
         self.t = {k: [] for k in ("marketplaces", "canais", "categorias", "produtos", "promocoes", "links",
                                   "fila", "historico", "comissoes", "execucoes", "logs", "precos", "cupons", "cupons_produtos", "cupons_pub",
                                   "comissoes_importacoes", "selecoes", "equivalentes", "experimentos", "resumos",
-                                  "cliques", "comissoes_eventos")}
+                                  "cliques", "comissoes_eventos", "canais_categorias", "tarefas", "alertas",
+                                  "alertas_avisos", "wa_inscritos", "wa_eventos", "wa_envios")}
         self.cofre: dict[tuple[str, str], str] = {}
         self.relogio = agora  # os testes trocam para simular a passagem do tempo
         for codigo, nome, doms, modo, padrao in [
                 ("shopee", "Shopee", ["s.shopee.com.br", "shope.ee"], "demo", r"^https://(s\.shopee\.com\.br|shope\.ee)/[A-Za-z0-9_-]+"),
                 ("mercado_livre", "Mercado Livre", ["mercadolivre.com"], "manual", r"^https://mercadolivre\.com/sec/[A-Za-z0-9]+"),
-                ("demo", "Loja de Demonstração", ["demo.invalid"], "demo", r"^https://demo\.invalid/")]:
+                ("demo", "Loja de Demonstração", ["demo.invalid"], "demo", r"^https://demo\.invalid/"),
+                ("aliexpress", "AliExpress", ["s.click.aliexpress.com", "pt.aliexpress.com", "aliexpress.com"], "desativado", None),
+                ("amazon", "Amazon", ["amzn.to", "www.amazon.com.br", "amazon.com.br"], "desativado", None),
+                ("magalu", "Magalu", [], "manual", None)]:
             destino = {"shopee": ["shopee.com.br"], "mercado_livre": ["mercadolivre.com.br", "mercadolivre.com"]}.get(codigo, [])
             self.t["marketplaces"].append({"id": self._id(), "codigo": codigo, "nome": nome, "padrao_afiliado": padrao,
                                            "dominios_afiliado": doms, "modo": modo, "ativo": True, "dominios_destino": destino,
@@ -206,7 +210,8 @@ class MemoriaRepositorio(Repositorio):
                 "desconto_pct": pr["desconto_pct"], "marketplace": mkt["codigo"], "marketplace_nome": mkt["nome"],
                 "link_id": link["id"] if link else None, "link_validado": bool(link), "demo": pr["demo"],
                 "origem": pr["origem"], "publicada_em": pr["publicada_em"], "produto_id": prod["id"],
-                "pontuacao": pr.get("pontuacao"), "classificacao": pr.get("classificacao"), "analise": pr.get("analise")}
+                "pontuacao": pr.get("pontuacao"), "classificacao": pr.get("classificacao"), "analise": pr.get("analise"),
+                "categoria_id": prod.get("categoria_id")}
 
     def promocoes_para_enfileirar(self, limite):
         na_fila = {f["promocao_id"] for f in self.t["fila"] if f["status"] in ("pendente", "processando")}
@@ -214,7 +219,7 @@ class MemoriaRepositorio(Repositorio):
         lista = [v for v in lista if v["link_validado"] and v["classificacao"] in ("excelente", "boa")]
         return sorted(lista, key=lambda v: (v["pontuacao"] or 0, v["desconto_pct"]), reverse=True)[:limite]
 
-    def enfileirar(self, promocao_id, canal_id, link_id, prioridade=5):
+    def enfileirar(self, promocao_id, canal_id, link_id, prioridade=5, agendado_para=None):
         pr = self._um("promocoes", id=promocao_id)
         canal = self._um("canais", id=canal_id)
         link = self._um("links", id=link_id)
@@ -232,7 +237,7 @@ class MemoriaRepositorio(Repositorio):
             return False
         self.t["fila"].append({"id": self._id(), "promocao_id": promocao_id, "canal_id": canal_id,
                                "link_afiliado_id": link_id, "prioridade": prioridade, "status": "pendente",
-                               "tentativas": 0, "max_tentativas": 3})
+                               "tentativas": 0, "max_tentativas": 3, "agendado_para": agendado_para or self.relogio()})
         return True
 
     def pegar_fila(self, limite):
@@ -738,3 +743,176 @@ class MemoriaRepositorio(Repositorio):
         h = self._um("historico", id=publicacao_id)
         self.t["cliques"].append({"id": self._id(), "publicacao_id": publicacao_id, "promocao_id": h["promocao_id"],
                                   "ocorrido_em": quando or self.relogio()})
+
+    # ---------------------------------------------------------------- expansão modular (espelho da 020)
+    def _hoje(self):
+        return self.relogio().astimezone(timezone(timedelta(hours=-3))).date()
+
+    def salvar_configuracao(self, chave, valor):
+        self.config[chave] = valor
+
+    def canais_categorias(self):
+        saida = {}
+        for l in self.t["canais_categorias"]:
+            saida.setdefault(l["canal_id"], []).append(l["categoria_id"])
+        return saida
+
+    def ultimo_agendado(self, canal_id):
+        datas = [f["agendado_para"] for f in self.t["fila"] if f["canal_id"] == canal_id and f["status"] in ("pendente", "processando")]
+        return max(datas) if datas else None
+
+    def tarefa_enfileirar(self, tipo, payload, chave=None, agendar_para=None):
+        if chave and self._um("tarefas", tipo=tipo, chave=chave):
+            return None
+        t = {"id": self._id(), "tipo": tipo, "payload": payload, "chave": chave, "status": "pendente", "tentativas": 0,
+             "max_tentativas": 5, "agendada_para": agendar_para or self.relogio(), "bloqueada_ate": None, "worker": None,
+             "ultimo_erro": None, "resultado": None}
+        self.t["tarefas"].append(t)
+        return t["id"]
+
+    def tarefas_pegar(self, tipos, limite, bloqueio_min, worker):
+        agora_ = self.relogio()
+        for t in self.t["tarefas"]:
+            if t["status"] == "processando" and t["bloqueada_ate"] < agora_ and t["tentativas"] >= t["max_tentativas"]:
+                t.update(status="falhou", bloqueada_ate=None, ultimo_erro=t["ultimo_erro"] or "Tempo esgotado no worker")
+        livres = [t for t in self.t["tarefas"] if t["tipo"] in tipos and t["tentativas"] < t["max_tentativas"] and (
+            (t["status"] == "pendente" and t["agendada_para"] <= agora_)
+            or (t["status"] == "processando" and t["bloqueada_ate"] < agora_))]
+        livres = sorted(livres, key=lambda t: (t["agendada_para"], t["id"]))[:limite]
+        for t in livres:
+            t.update(status="processando", tentativas=t["tentativas"] + 1, worker=worker,
+                     bloqueada_ate=agora_ + timedelta(minutes=max(bloqueio_min, 1)))
+        return [dict(t) for t in livres]
+
+    def tarefa_concluir(self, tarefa_id, ok, erro, resultado, worker):
+        t = self._um("tarefas", id=tarefa_id)
+        if not t or t["status"] != "processando" or (worker and t["worker"] != worker):
+            return False
+        if ok:
+            t.update(status="concluida", bloqueada_ate=None, ultimo_erro=None, resultado=resultado)
+        else:
+            t.update(status="falhou" if t["tentativas"] >= t["max_tentativas"] else "pendente", bloqueada_ate=None,
+                     ultimo_erro=(erro or "")[:2000],
+                     agendada_para=self.relogio() + timedelta(seconds=min(3600, 30 * 2 ** t["tentativas"])))
+        return True
+
+    def ofertas_vitrine(self, dias=7):
+        saida = []
+        for pr in self.t["promocoes"]:
+            prod = self._um("produtos", id=pr["produto_id"])
+            if pr["status"] != "publicada" or pr["demo"] or prod.get("demo") or not prod["disponivel"]:
+                continue
+            if pr.get("classificacao") not in ("excelente", "boa"):
+                continue
+            link = self._link_valido(prod["id"])
+            if not link:
+                continue
+            comp = bool((pr.get("analise") or {}).get("desconto_comprovado"))
+            cat = self._um("categorias", id=prod.get("categoria_id")) if prod.get("categoria_id") else None
+            saida.append({"promocao_id": pr["id"], "titulo": prod["titulo"], "preco": pr["preco_promocional"],
+                          "preco_referencia": pr["preco_referencia"] if comp else None,
+                          "desconto_pct": ((pr.get("analise") or {}).get("desconto_real") or pr["desconto_pct"]) if comp else None,
+                          "desconto_comprovado": comp, "imagem_url": prod.get("imagem_url"), "marca": prod.get("marca"),
+                          "categoria": cat["nome"] if cat else None,
+                          "marketplace_nome": self._um("marketplaces", id=prod["marketplace_id"])["nome"],
+                          "link_id": link["id"], "publicada_em": pr.get("publicada_em")})
+        return saida
+
+    def cupons_vitrine(self):
+        return [{"titulo": c.titulo, "codigo": c.codigo, "condicoes": getattr(c, "regras", None),
+                 "fim_em": c.fim_em.date().isoformat() if hasattr(c.fim_em, "date") else str(c.fim_em)[:10],
+                 "marketplace_nome": c.marketplace} for c in self.cupons_vigentes() if not c.demo]
+
+    def ofertas_publicadas_desde(self, desde):
+        vistos, saida = set(), []
+        for h in sorted(self.t["historico"], key=lambda h: h["publicado_em"], reverse=True):
+            if h["resultado"] != "sucesso" or h["demo"] or h["publicado_em"] < desde or h["promocao_id"] in vistos:
+                continue
+            pr = self._um("promocoes", id=h["promocao_id"])
+            if pr["status"] != "publicada":
+                continue
+            prod = self._um("produtos", id=pr["produto_id"])
+            vistos.add(pr["id"])
+            saida.append({"promocao_id": pr["id"], "titulo": prod["titulo"], "preco": pr["preco_promocional"],
+                          "link_id": h.get("link_afiliado_id") or self._link_valido(prod["id"])["id"],
+                          "categoria_id": prod.get("categoria_id")})
+        return saida
+
+    def criar_alerta(self, chat_id, termo, preco_maximo):
+        self.t["alertas"].append({"id": self._id(), "telegram_chat_id": chat_id, "termo": termo, "preco_maximo": preco_maximo, "ativo": True})
+
+    def alertas_da_pessoa(self, chat_id):
+        return [dict(a) for a in self.t["alertas"] if a["telegram_chat_id"] == chat_id and a["ativo"]]
+
+    def apagar_alerta(self, alerta_id):
+        self.t["alertas"] = [a for a in self.t["alertas"] if a["id"] != alerta_id]
+        self.t["alertas_avisos"] = [v for v in self.t["alertas_avisos"] if v["alerta_id"] != alerta_id]
+
+    def alertas_apagar_tudo(self, chat_id):
+        for a in [a for a in self.t["alertas"] if a["telegram_chat_id"] == chat_id]:
+            self.apagar_alerta(a["id"])
+
+    def alertas_ativos(self):
+        return [dict(a) for a in self.t["alertas"] if a["ativo"]]
+
+    def registrar_aviso(self, alerta_id, promocao_id):
+        if self._um("alertas_avisos", alerta_id=alerta_id, promocao_id=promocao_id):
+            return False
+        self.t["alertas_avisos"].append({"alerta_id": alerta_id, "promocao_id": promocao_id, "enviado_em": self.relogio()})
+        return True
+
+    def avisos_hoje_por_pessoa(self):
+        saida = {}
+        for v in self.t["alertas_avisos"]:
+            a = self._um("alertas", id=v["alerta_id"])
+            if a and v["enviado_em"].astimezone(timezone(timedelta(hours=-3))).date() == self._hoje():
+                saida[a["telegram_chat_id"]] = saida.get(a["telegram_chat_id"], 0) + 1
+        return saida
+
+    def whatsapp_inscrever(self, telefone, origem, texto, categorias=None):
+        if not re.fullmatch(r"\+[1-9][0-9]{7,14}", telefone or ""):
+            raise RegraViolada("telefone fora do formato internacional", codigo="23514")
+        i = self._um("wa_inscritos", telefone=telefone)
+        if i:
+            i.update(descadastrado_em=None, consentimento_em=self.relogio(), consentimento_origem=origem, texto_consentimento=texto)
+        else:
+            i = {"id": self._id(), "telefone": telefone, "categorias": list(categorias or []), "consentimento_em": self.relogio(),
+                 "consentimento_origem": origem, "texto_consentimento": texto, "descadastrado_em": None}
+            self.t["wa_inscritos"].append(i)
+        self.whatsapp_evento(i["id"], "optin", None, origem)
+        return i["id"]
+
+    def whatsapp_descadastrar(self, telefone):
+        i = self._um("wa_inscritos", telefone=telefone)
+        if not i or i["descadastrado_em"]:
+            return False
+        i["descadastrado_em"] = self.relogio()
+        self.whatsapp_evento(i["id"], "optout", None, None)
+        return True
+
+    def whatsapp_destinatarios(self, categoria_id, max_dia, promocao_id):
+        saida = []
+        for i in self.t["wa_inscritos"]:
+            if i["descadastrado_em"] or (i["categorias"] and categoria_id not in i["categorias"]):
+                continue
+            if self._um("wa_envios", inscrito_id=i["id"], promocao_id=promocao_id):
+                continue
+            hoje = sum(1 for e in self.t["wa_eventos"] if e["inscrito_id"] == i["id"] and e["tipo"] == "envio"
+                       and e["ocorrido_em"].astimezone(timezone(timedelta(hours=-3))).date() == self._hoje())
+            if hoje < max_dia:
+                saida.append({"id": i["id"], "telefone": i["telefone"]})
+        return saida
+
+    def whatsapp_reservar(self, inscrito_id, promocao_id):
+        if self._um("wa_envios", inscrito_id=inscrito_id, promocao_id=promocao_id):
+            return False
+        self.t["wa_envios"].append({"inscrito_id": inscrito_id, "promocao_id": promocao_id})
+        return True
+
+    def whatsapp_gasto_hoje(self):
+        return round(sum(float(e["custo_usd"] or 0) for e in self.t["wa_eventos"]
+                         if e["ocorrido_em"].astimezone(timezone(timedelta(hours=-3))).date() == self._hoje()), 4)
+
+    def whatsapp_evento(self, inscrito_id, tipo, custo, detalhe):
+        self.t["wa_eventos"].append({"inscrito_id": inscrito_id, "tipo": tipo, "custo_usd": custo, "detalhe": detalhe,
+                                     "ocorrido_em": self.relogio()})
