@@ -146,3 +146,27 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--p-vivo); ou
 .login .card { text-align: left; border: 2px solid var(--p-claro); }
 .logo-login { display: block; width: 150px; height: 150px; margin: 0 auto 8px; border-radius: 50%; box-shadow: 0 4px 18px rgba(220, 27, 99, .25); }
 .janela-story { background: rgba(185, 3, 63, .45); }
+
+/* ===== Ajustes para celular ===== */
+html, body { overflow-x: hidden; max-width: 100%; }
+/* tabelas largas rolam dentro do cartão, sem empurrar a página para o lado */
+.card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.card table th, .card table td { padding: 8px 8px; }
+.card table td.n, .card table th.n { white-space: nowrap; }
+/* campos lado a lado: não deixa um invadir o outro (data no iPhone) */
+.linha > * { min-width: 0; }
+input, select, textarea { max-width: 100%; min-width: 0; }
+input[type="date"], input[type="month"], input[type="time"] { -webkit-appearance: none; appearance: none; display: block; min-height: 44px; text-align: left; }
+input::-webkit-date-and-time-value { text-align: left; }
+/* topo compacto */
+.topo { padding: 10px 12px; }
+.topo .marca { min-width: 0; flex: 1; }
+.topo .marca > div { min-width: 0; }
+.topo h1 { font-size: 15px; line-height: 1.2; }
+.topo .logo { width: 36px; height: 36px; }
+.topo-acoes { flex: none; }
+.topo-acoes .b { padding: 7px 10px; font-size: 12px; line-height: 1.2; }
+@media (max-width: 420px) {
+  .faixa-demo { font-size: 12px; padding: 7px 12px; }
+  h2 { font-size: 22px; }
+}
