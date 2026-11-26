@@ -65,10 +65,18 @@ async def main():
         alerta = await pg.inner_text("#alertas")
         checar("telegram" in alerta and "credencial recusada" in alerta, "resumo alerta canal com credencial recusada")
         await pg.screenshot(path=CAPTURAS / "1_resumo.png", full_page=True)
-        for tela in ["ofertas", "nova", "cupons", "comissoes", "financeiro", "logs", "ajustes"]:
+        largas = []
+        for tela in ["resumo", "ofertas", "nova", "cupons", "comissoes", "financeiro", "desempenho", "logs", "ajustes"]:
             await pg.click(f'nav button[data-tela="{tela}"]')
             await pg.wait_for_timeout(400)
+            if await pg.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
+                largas.append(tela)
+            sobrepostos = await pg.evaluate("""() => [...document.querySelectorAll('.linha')].filter((l) => {
+                const [a, b] = [...l.children].map((c) => c.getBoundingClientRect()); return a && b && a.right > b.left + 1; }).length""")
+            if sobrepostos:
+                largas.append(tela + " (campos sobrepostos)")
             await pg.screenshot(path=CAPTURAS / f"dono_{tela}.png", full_page=True)
+        checar(not largas, f"celular: nenhuma tela passa da largura nem tem campos sobrepostos {largas or ''}")
         # ---- cupons
         await pg.click('nav button[data-tela="cupons"]'); await pg.wait_for_timeout(400)
         lista = await pg.inner_text("#c-lista")

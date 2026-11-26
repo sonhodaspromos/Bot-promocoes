@@ -68,7 +68,7 @@ async function iniciar() {
   ctx.ehDono = ctx.papel === "dono";
 
   const { data: nome } = await sb.from("configuracoes").select("valor").eq("chave", "visual.nome_perfil").maybeSingle();
-  $("#titulo").textContent = (nome?.valor || "Sonho das Promos") + " · Painel";
+  $("#titulo").textContent = (nome?.valor || "Sonho das Promos");
   $("#papel").textContent = ctx.papel;
   $("#papel").classList.remove("hide");
   $("#btn-sair").classList.remove("hide");
@@ -97,7 +97,7 @@ async function atualizarParada() {
   const faixa = $("#faixa-parada"), botao = $("#btn-parar");
   faixa.classList.toggle("hide", !ctx.parada);
   faixa.textContent = ctx.parada ? `⛔ PUBLICAÇÕES INTERROMPIDAS — ${v["sistema.parada_motivo"] || "parada de emergência"}` : "";
-  botao.textContent = ctx.parada ? "▶ Retomar" : "⛔ Parar tudo";
+  botao.textContent = ctx.parada ? "▶ Retomar" : "⛔ Parar";
   botao.classList.toggle("hide", !ctx.podeEditar || (ctx.parada && !ctx.ehDono));
 }
 $("#btn-parar").addEventListener("click", async () => {
