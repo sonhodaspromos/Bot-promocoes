@@ -8,12 +8,14 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .textos import reais
 
-PASTAS_FONTES = ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/truetype/liberation",
-                 str(Path(__file__).resolve().parents[2] / "fontes")]
+RAIZ = Path(__file__).resolve().parents[2]
+PASTAS_FONTES = [str(RAIZ / "fontes"), "/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/truetype/liberation"]
+PASTA_MARCA = RAIZ / "marca"  # logo.png (redondo, fundo transparente) e story_fundo.png (1080x1920), opcionais
 
 
 def fonte(tamanho: int, negrito: bool = False):
-    nomes = ["DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf"] if negrito else ["DejaVuSans.ttf", "LiberationSans-Regular.ttf"]
+    nomes = (["Poppins-Bold.ttf", "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf"] if negrito
+             else ["Poppins-Regular.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf"])
     for pasta in PASTAS_FONTES:
         for nome in nomes:
             caminho = Path(pasta) / nome
@@ -59,24 +61,52 @@ def abrir_foto(conteudo: bytes | None) -> Image.Image:
         return foto_padrao()
 
 
+def imagem_marca(nome: str, tamanho: tuple[int, int] | None = None) -> Image.Image | None:
+    """Imagem da identidade visual em backend/marca. Sem o arquivo (ou corrompido), a arte sai no layout padrão."""
+    caminho = PASTA_MARCA / nome
+    if not caminho.exists():
+        return None
+    try:
+        img = Image.open(caminho).convert("RGBA")
+    except Exception:
+        return None
+    return img.resize(tamanho, Image.LANCZOS) if tamanho and img.size != tamanho else img
+
+
 def criar_arte(d: dict, foto: Image.Image, largura: int, altura: int, cfg: dict, destaque: bool = False) -> bytes:
     principal = cfg.get("visual.cor_principal") or "#EE4D2D"
     realce = cfg.get("visual.cor_destaque") or "#FFD400"
     img = Image.new("RGB", (largura, altura), principal)
-    dr = ImageDraw.Draw(img)
     m = 60
     story = altura > largura * 1.5
+    # story com o fundo da marca: o modelo traz o padrão do @ e a faixa de chamada embaixo (de ~72% da altura
+    # para baixo); o cartão do produto ocupa só a parte de cima, sem cobrir a faixa
+    fundo = imagem_marca("story_fundo.png", (largura, altura)) if story and cfg.get("visual.usar_fundo_story", True) else None
+    if fundo is not None:
+        img.paste(fundo.convert("RGB"))
+    dr = ImageDraw.Draw(img)
 
-    topo = 150 if story else 120
-    titulo_topo = "OFERTA IMPERDÍVEL" if destaque else (cfg.get("visual.nome_perfil") or "Ofertas")
-    dr.text((largura // 2, topo // 2 + (40 if story else 10)), titulo_topo[:28],
-            fill=realce if destaque else "white", font=fonte(60 if destaque else 54, True), anchor="mm")
+    logo = imagem_marca("logo.png")
+    if fundo is not None:
+        topo = 70
+    else:
+        topo = 150 if story else 120
+        titulo_topo = "OFERTA IMPERDÍVEL" if destaque else (cfg.get("visual.nome_perfil") or "Ofertas")
+        tam_logo = 0
+        if logo is not None:
+            tam_logo = topo - 20
+            img.paste(logo.resize((tam_logo, tam_logo), Image.LANCZOS), (m, (topo - tam_logo) // 2 + (40 if story else 0)),
+                      logo.resize((tam_logo, tam_logo), Image.LANCZOS))
+        dr.text((largura // 2 + tam_logo // 2, topo // 2 + (40 if story else 10)), titulo_topo[:28],
+                fill=realce if destaque else "white", font=fonte(56 if destaque else 50, True), anchor="mm")
 
-    y0, y1 = topo + (60 if story else 20), altura - (260 if story else 40)
-    dr.rounded_rectangle((m, y0, largura - m, y1), radius=40, fill="white")
+    y0 = topo + (60 if story and fundo is None else 20)
+    y1 = int(altura * 0.70) if fundo is not None else altura - (260 if story else 40)
+    dr.rounded_rectangle((m, y0, largura - m, y1), radius=40, fill="white",
+                         outline=principal if fundo is not None else None, width=6 if fundo is not None else 0)
 
     area = largura - 4 * m
-    alt_foto = int(area * (1.1 if story else 0.86))
+    alt_foto = int(area * (0.9 if fundo is not None else 1.1 if story else 0.86))
     f = foto.copy()
     f.thumbnail((area, alt_foto))
     img.paste(f, ((largura - f.width) // 2, y0 + 40 + (alt_foto - f.height) // 2))
@@ -128,7 +158,7 @@ def criar_arte(d: dict, foto: Image.Image, largura: int, altura: int, cfg: dict,
         y_loja += fc.size + 40
     dr.text((2 * m, y_loja), (d.get("marketplace_nome") or "")[:30], fill="#555555", font=fonte(34, True))
 
-    if story:
+    if story and fundo is None:
         bx0, by0, bx1, by1 = m + 40, altura - 210, largura - m - 40, altura - 90
         dr.rounded_rectangle((bx0, by0, bx1, by1), radius=60, fill=realce)
         dr.text((largura // 2, (by0 + by1) // 2), (cfg.get("textos.rodape_story") or "")[:30], fill="black",

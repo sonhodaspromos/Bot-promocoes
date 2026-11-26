@@ -25,8 +25,8 @@ from pathlib import Path
 
 from .textos import reais
 
-CSS = """*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f6f7;color:#1f2328}
-header{background:#c2361a;color:#fff;padding:14px 16px}header a{color:#fff;text-decoration:none}.marca{font-size:20px;font-weight:700;margin:0}h1{font-size:20px;margin:8px 0}
+CSS = """*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#fdf3f8;color:#1f2328}
+header{background:#dc1b63;color:#fff;padding:14px 16px}header a{color:#fff;text-decoration:none}.marca{font-size:20px;font-weight:700;margin:0}h1{font-size:20px;margin:8px 0}
 .publi{background:#fff3d6;color:#7a5200;font-size:13px;padding:8px 16px}main{max-width:1100px;margin:0 auto;padding:12px}
 nav.cats{display:flex;gap:8px;overflow-x:auto;padding:8px 0}nav.cats a{background:#fff;border-radius:999px;padding:6px 12px;color:#1f2328;text-decoration:none;white-space:nowrap;font-size:14px}
 .filtros{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.filtros input,.filtros select{padding:10px;border:1px solid #d0d7de;border-radius:10px;font-size:15px;flex:1;min-width:140px}
@@ -34,8 +34,8 @@ nav.cats{display:flex;gap:8px;overflow-x:auto;padding:8px 0}nav.cats a{backgroun
 .card{background:#fff;border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:6px}.card img{width:100%;aspect-ratio:1;object-fit:contain;border-radius:10px;background:#fafafa}
 .card h2,.card h3{font-size:14px;margin:0;line-height:1.3}.preco{font-size:18px;font-weight:700}.de{color:#57606a;text-decoration:line-through;font-size:13px}
 .off{background:#1a7f37;color:#fff;border-radius:6px;padding:1px 6px;font-size:12px}.loja{color:#57606a;font-size:12px}
-.botao{display:block;text-align:center;background:#c2361a;color:#fff;border-radius:10px;padding:10px;text-decoration:none;font-weight:600;margin-top:auto}
-.cupom{background:#fff;border:2px dashed #ee4d2d;border-radius:12px;padding:12px;margin-bottom:10px}code{background:#f0f0f0;padding:2px 6px;border-radius:6px}
+.botao{display:block;text-align:center;background:#dc1b63;color:#fff;border-radius:10px;padding:10px;text-decoration:none;font-weight:600;margin-top:auto}
+.cupom{background:#fff;border:2px dashed #dc1b63;border-radius:12px;padding:12px;margin-bottom:10px}code{background:#f0f0f0;padding:2px 6px;border-radius:6px}
 footer{color:#57606a;font-size:12px;text-align:center;padding:24px 12px}[hidden]{display:none!important}
 a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #0969da;outline-offset:2px}.conferido{color:#57606a;font-size:11px}"""
 
