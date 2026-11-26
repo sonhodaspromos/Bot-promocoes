@@ -170,3 +170,8 @@ input::-webkit-date-and-time-value { text-align: left; }
   .faixa-demo { font-size: 12px; padding: 7px 12px; }
   h2 { font-size: 22px; }
 }
+
+/* prévia do "Puxar dados" */
+.previa-produto { display: flex; gap: 12px; align-items: center; margin-top: 10px; padding: 10px; border: 1px solid var(--ln); border-radius: 12px; background: var(--p-claro2); }
+.previa-produto img, .previa-produto .sem-foto { width: 72px; height: 72px; object-fit: contain; border-radius: 10px; background: #fff; flex: none; }
+.previa-produto .m { color: var(--mu); font-size: 12.5px; }

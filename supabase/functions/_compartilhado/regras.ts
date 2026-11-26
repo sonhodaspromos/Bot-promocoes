@@ -51,3 +51,10 @@ export function podeDisparar(s: Sessao | null): { ok: boolean; motivo?: string }
   if (s.mfa_exigido !== false && s.aal !== "aal2") return { ok: false, motivo: "Confirme o código do app autenticador (2º fator) para continuar." };
   return { ok: true };
 }
+
+/** Ações de edição do painel (ex.: "Puxar dados"): dono/editor E com o 2º fator quando o MFA é exigido. */
+export function podeEditar(s: Sessao | null): { ok: boolean; motivo?: string } {
+  if (!s || (s.papel !== "dono" && s.papel !== "editor")) return { ok: false, motivo: "Apenas dono ou editor podem cadastrar ofertas." };
+  if (s.mfa_exigido !== false && s.aal !== "aal2") return { ok: false, motivo: "Confirme o código do app autenticador (2º fator) para continuar." };
+  return { ok: true };
+}

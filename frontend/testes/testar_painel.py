@@ -148,6 +148,15 @@ async def main():
                "aprovar envia status 'aprovada'")
         await pg.click('nav button[data-tela="nova"]'); await pg.wait_for_timeout(300)
         await pg.select_option("#n-loja", "mercado_livre")
+        await pg.fill("#n-link", "https://meli.la/29AfLW4")
+        await pg.click("#n-puxar"); await pg.wait_for_timeout(400)
+        checar(await pg.evaluate("window.__puxar") == {"url": "https://meli.la/29AfLW4", "marketplace": "mercado_livre"},
+               "puxar dados: envia o link e a loja")
+        checar(await pg.input_value("#n-titulo") == "Perfume <b>Teste</b> 30ml" and await pg.input_value("#n-preco") == "241,00"
+               and await pg.input_value("#n-antigo") == "419,90" and await pg.input_value("#n-img") == "https://http2.mlstatic.com/foto.webp"
+               and await pg.input_value("#n-id") == "MLB123456789", "puxar dados: preenche título, preços, foto e código")
+        checar(await pg.locator("#n-previa b", has_text="Perfume").count() == 1 and await pg.locator("#n-previa b b").count() == 0,
+               "puxar dados: prévia mostra o produto sem injetar HTML")
         await pg.fill("#n-link", "https://www.mercadolivre.com.br/produto")
         await pg.fill("#n-titulo", "Air Fryer"); await pg.fill("#n-preco", "299,90")
         await pg.click("#n-salvar"); await pg.wait_for_timeout(300)

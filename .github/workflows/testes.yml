@@ -101,4 +101,4 @@ jobs:
         with:
           deno-version: v2.x
       - name: Tipagem das funções
-        run: deno check supabase/functions/r/index.ts supabase/functions/disparar/index.ts
+        run: deno check supabase/functions/r/index.ts supabase/functions/disparar/index.ts supabase/functions/puxar-dados/index.ts
