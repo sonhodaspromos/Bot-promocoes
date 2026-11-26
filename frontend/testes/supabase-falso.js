@@ -59,6 +59,8 @@ const DADOS = {
       pontuacao: 88, classificacao: "excelente", confianca: 92, analise: { bloqueios: [], motivos: ["Desconto real de 40% (preço de R$ 499,90 confirmado pelo histórico)", "Menor preço registrado nos últimos 90 dias"], alertas: [], desconto_real: 40, base_desconto: "histórico", componentes: [{ nome: "desconto real", peso: 35, nota: 0.77, pontos: 26.95, explicacao: "40% de desconto real" }] } },
     { id: 13, produto_id: 23, status: "aprovada", titulo: "Perfume de teste 30ml", preco_promocional: 241, preco_referencia: 419, desconto_pct: 42, demo: false, link_id: 77, link_validado: true, link_url: "https://meli.la/abc123", marketplace_nome: "Mercado Livre", categoria: "Beleza", categoria_id: 3, cliques: 0, comissao_total: 0, criado_em: agora, imagem_url: null, motivo_status: null,
       pontuacao: 80, classificacao: "boa", confianca: 80, analise: null },
+    { id: 14, produto_id: 24, status: "publicada", titulo: "Tênis antigo publicado", preco_promocional: 276.44, preco_referencia: 349.99, desconto_pct: 21, demo: false, link_id: 78, link_validado: true, link_url: "https://meli.la/2FFbrsZ", marketplace: "mercado_livre", marketplace_nome: "Mercado Livre", categoria: "Moda", categoria_id: 3, cliques: 5, comissao_total: 0, criado_em: agora, publicada_em: agora, imagem_url: null, motivo_status: null,
+      pontuacao: 70, classificacao: "boa", confianca: 80, analise: null },
   ],
   vw_metricas_diarias: [
     { dia: hoje, produtos_encontrados: 40, promocoes_criadas: 12, publicacoes: 8, publicacoes_telegram: 4, publicacoes_stories: 3, publicacoes_feed: 1, cliques: 25, comissoes: 7.5 },

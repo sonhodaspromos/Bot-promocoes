@@ -63,11 +63,11 @@ def test_preco_igual_mantem_publicada_e_marca_a_conferencia():
     assert repo._um("produtos", id=pid)["preco_atual"] == 276.44
 
 
-def test_so_le_a_pagina_uma_vez_por_dia():
-    repo, pid, promo, _ = cenario(verificado=AGORA - timedelta(hours=3))  # intervalo padrão: 6 h
+def test_nao_le_a_pagina_antes_do_intervalo():
+    repo, pid, promo, _ = cenario(verificado=AGORA - timedelta(minutes=30))  # intervalo padrão: 1 h
     s = redireciona_para_produto()
     monitor(repo, s).executar(repo.configuracoes())
-    assert repo._um("produtos", id=pid)["preco_atual"] == 276.44          # não atualizou (conferido há 3 h, intervalo de 6 h)
+    assert repo._um("produtos", id=pid)["preco_atual"] == 276.44          # não atualizou (conferido há 30 min, intervalo de 1 h)
     assert repo._um("promocoes", id=promo)["status"] == "publicada"
 
 
@@ -110,3 +110,77 @@ def test_extracao_igual_ao_painel():
     assert d["titulo"] == "Tênis Jump Hook adidas 35" and d["preco"] == 276.44 and d["preco_antigo"] == 349.99
     assert d["id_externo"] == "MLB4657663257" and d["disponivel"] is True
     assert numero_preco("1.299") == 1299 and numero_preco("2.199,90") == 2199.9 and numero_preco(True) is None
+
+
+# ---- ofertas na FILA (ainda não publicadas)
+def cenario_fila(preco=276.44, verificado_ha_horas=30):
+    repo = MemoriaRepositorio()
+    ml = next(m for m in repo.marketplaces() if m["codigo"] == "mercado_livre")
+    o = OfertaEncontrada("mercado_livre", "MLB4657663257", "Tênis", preco, "https://meli.la/2FFbrsZ", 349.99)
+    pid, _ = repo.salvar_produto(o, ml["id"], None)
+    promo = repo.criar_promocao(pid, o, "aprovada", "manual")
+    repo.salvar_link(pid, promo, o.link_afiliado)          # link ainda NÃO validado (a fila confere a página mesmo assim)
+    repo._um("produtos", id=pid)["verificado_em"] = AGORA - timedelta(hours=verificado_ha_horas)
+    return repo, pid, promo
+
+
+def test_fila_preco_caiu_a_oferta_passa_a_ter_o_preco_de_agora():
+    repo, pid, promo = cenario_fila(preco=276.44)
+    s = (SessaoFalsa().quando("GET", "meli.la", RespostaFalsa(302, headers={"Location": "https://www.mercadolivre.com.br/p/MLB1"}))
+         .quando("GET", "mercadolivre.com.br", RespostaFalsa(200, texto=pagina("259,90", extra='<span aria-label="Agora: 259 reais com 90 centavos"></span> 25% OFF no Pix'))))
+    monitor(repo, s).executar(repo.configuracoes())
+    p = repo._um("promocoes", id=promo)
+    assert p["status"] == "aprovada" and p["preco_promocional"] == 259.9 and p["preco_referencia"] == 349.99
+    assert p["referencia_origem"] == "pagina" and p["preco_no_pix"] is True
+    assert repo._um("produtos", id=pid)["preco_atual"] == 259.9
+
+
+def test_fila_preco_subiu_muito_pausa_antes_de_publicar():
+    repo, pid, promo = cenario_fila(preco=276.44)
+    monitor(repo, redireciona_para_produto()).executar(repo.configuracoes())   # página: R$ 320,00 (+15%)
+    p = repo._um("promocoes", id=promo)
+    assert p["status"] == "pausada" and p["preco_promocional"] == 276.44   # pausada, não "corrigida" para cima
+
+
+def test_fila_conferida_ha_pouco_nao_le_de_novo():
+    repo, pid, promo = cenario_fila(verificado_ha_horas=0.5)
+    s = redireciona_para_produto()
+    monitor(repo, s).executar(repo.configuracoes())
+    assert not s.chamadas and repo._um("promocoes", id=promo)["preco_promocional"] == 276.44
+
+
+def test_fila_desligada_na_configuracao():
+    repo, pid, promo = cenario_fila()
+    s = redireciona_para_produto()
+    monitor(repo, s).executar({**repo.configuracoes(), "monitor.conferir_fila": False})
+    assert not s.chamadas
+
+
+def test_fila_link_quebrado_invalida():
+    repo, pid, promo = cenario_fila()
+    s = SessaoFalsa().quando("GET", "meli.la", RespostaFalsa(404, texto="não encontrado"))
+    monitor(repo, s).executar(repo.configuracoes())
+    assert all(not l["validado"] for l in repo.t["links"] if l["produto_id"] == pid)
+
+
+def test_bloqueio_de_robo_para_de_ler_paginas_na_rodada():
+    repo, pid1, promo1 = cenario_fila()
+    ml = next(m for m in repo.marketplaces() if m["codigo"] == "mercado_livre")
+    o = OfertaEncontrada("mercado_livre", "MLB999", "Outro", 50.0, "https://meli.la/outro", None)
+    pid2, _ = repo.salvar_produto(o, ml["id"], None)
+    p2 = repo.criar_promocao(pid2, o, "aprovada", "manual")
+    repo.salvar_link(pid2, p2, o.link_afiliado)
+    repo._um("produtos", id=pid2)["verificado_em"] = AGORA - timedelta(hours=30)
+    s = SessaoFalsa().quando("GET", "meli.la", RespostaFalsa(200, texto="<html>captcha: verifique que você não é um robô</html>"))
+    monitor(repo, s).executar(repo.configuracoes())
+    assert len([c for c in s.chamadas if "meli.la" in c["url"]]) == 1    # parou depois do primeiro bloqueio
+
+
+def test_intervalo_padrao_e_1_hora_e_limite_por_rodada_configuravel():
+    repo, pid, promo = cenario_fila(verificado_ha_horas=1.5)
+    s = redireciona_para_produto()
+    monitor(repo, s).executar(repo.configuracoes())
+    assert s.chamadas                                                    # 1h30 sem conferir: lê de novo
+    repo2, _, _ = cenario_fila()
+    s2 = redireciona_para_produto()
+    assert monitor(repo2, s2).executar({**repo2.configuracoes(), "monitor.max_por_rodada": 0}) >= 0   # 0 = usa o padrão (30)

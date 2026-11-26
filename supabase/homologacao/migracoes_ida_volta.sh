@@ -29,6 +29,7 @@ P iv_full -f migrations/20261125200000_auditoria_expansao.sql >/dev/null 2>&1
 # 027 e 028: aplicar tudo → reverter a 028 (= esquema da 027) → reverter a 027 (= esquema da 026) → reaplicar
 novo iv_026; ate iv_026 20261126160000; esquema iv_026 $T/026.sql; privs iv_026 $T/026.priv
 novo iv_027; ate iv_027 20261126170000; esquema iv_027 $T/027.sql; privs iv_027 $T/027.priv
+novo iv_028; ate iv_028 20261126180000; esquema iv_028 $T/028.sql; privs iv_028 $T/028.priv
 for f in migrations/*.sql; do [[ "$(basename "$f")" > "20261125200001" ]] && { P iv_full -f "$f" >/dev/null 2>&1 || { echo "✖ $f"; exit 1; }; }; done
 confere() {  # confere <rótulo> <arquivo de referência sem extensão>
   esquema iv_full $T/f_$2.sql; privs iv_full $T/f_$2.priv
@@ -36,12 +37,14 @@ confere() {  # confere <rótulo> <arquivo de referência sem extensão>
     && echo "✔ reverter $1 volta exatamente ao esquema e privilégios da $2" \
     || { echo "✖ $1↓ difere da $2:"; diff $T/$2.sql $T/f_$2.sql | head -20; diff $T/$2.priv $T/f_$2.priv | head; exit 1; }
 }
+P iv_full -f rollback/20261126180000_republicar_oferta.down.sql >/dev/null 2>&1; confere 029 028
 P iv_full -f rollback/20261126170000_motor_ia.down.sql >/dev/null 2>&1; confere 028 027
 P iv_full -f rollback/20261126160000_preco_loja_pix_cupom_sem_codigo.down.sql >/dev/null 2>&1; confere 027 026
 P iv_full -f migrations/20261126160000_preco_loja_pix_cupom_sem_codigo.sql >/dev/null 2>&1
 P iv_full -f migrations/20261126170000_motor_ia.sql >/dev/null 2>&1
+P iv_full -f migrations/20261126180000_republicar_oferta.sql >/dev/null 2>&1
 for f in tests/*.sql; do P iv_full -f "$f" >/dev/null; done
 R=$(psql -U "$U" -d iv_full -Atc "select count(*) || ' testes, ' || count(*) filter (where not ok) || ' reprovados' from testes.rodar()")
-echo "✔ reaplicadas 020, 021 e as seguintes (027 e 028 incluídas); bateria do banco: $R"
+echo "✔ reaplicadas 020, 021 e as seguintes (027, 028 e 029 incluídas); bateria do banco: $R"
 [[ "$R" == *" 0 reprovados" ]] || exit 1
-for d in iv_019 iv_020 iv_026 iv_027; do psql -U "$U" -q -d postgres -c "drop database $d"; done
+for d in iv_019 iv_020 iv_026 iv_027 iv_028; do psql -U "$U" -q -d postgres -c "drop database $d"; done

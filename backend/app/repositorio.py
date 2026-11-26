@@ -163,6 +163,12 @@ class Repositorio(ABC):
     # ---- monitor
     @abstractmethod
     def publicadas_para_monitorar(self, dias: int, limite: int) -> list[dict]: ...
+    def aprovadas_para_conferir(self, limite: int) -> list[dict]:
+        """Ofertas na fila (status 'aprovada'), as conferidas há mais tempo primeiro; mesmo formato do monitor."""
+        raise NotImplementedError
+    def sincronizar_oferta_na_fila(self, promocao_id: int, preco: float, preco_antigo: float | None, pix: bool) -> None:
+        """Ainda não publicada: a oferta passa a ter o preço lido agora na página (nada foi divulgado com o antigo)."""
+        raise NotImplementedError
     @abstractmethod
     def atualizar_produto(self, produto_id: int, preco: float, disponivel: bool, preco_original: float | None) -> None: ...
     @abstractmethod
@@ -644,6 +650,33 @@ class SupabaseRepositorio(Repositorio):
                 "link_id": link[0]["id"] if link else None,
                 "link_url": (link[0]["url_curta"] or link[0]["url"]) if link else None})
         return resultado
+
+    def aprovadas_para_conferir(self, limite):
+        linhas = self._get(
+            "promocoes",
+            select="id,produto_id,preco_promocional,produtos!inner(id_externo,verificado_em,"
+                   "marketplaces!inner(codigo,dominios_afiliado,dominios_destino))",
+            status="eq.aprovada", order="produtos(verificado_em).asc.nullsfirst", limit=str(limite))
+        resultado = []
+        for l in linhas:  # link ativo, validado ou não (a leitura da página confere o domínio a cada salto)
+            link = self._get("links_afiliados", select="id,url,url_curta", produto_id=f"eq.{l['produto_id']}",
+                             ativo="is.true", order="validado.desc", limit="1")
+            resultado.append({
+                "promocao_id": l["id"], "produto_id": l["produto_id"], "preco_promocional": float(l["preco_promocional"]),
+                "id_externo": l["produtos"]["id_externo"], "marketplace": l["produtos"]["marketplaces"]["codigo"],
+                "dominios": l["produtos"]["marketplaces"]["dominios_afiliado"],
+                "dominios_destino": l["produtos"]["marketplaces"].get("dominios_destino") or [],
+                "verificado_em": l["produtos"].get("verificado_em"),
+                "link_id": link[0]["id"] if link else None,
+                "link_url": (link[0]["url_curta"] or link[0]["url"]) if link else None})
+        return resultado
+
+    def sincronizar_oferta_na_fila(self, promocao_id, preco, preco_antigo, pix):
+        antigo = round(preco_antigo, 2) if preco_antigo and preco_antigo > preco else None
+        corpo = {"preco_promocional": round(preco, 2), "preco_referencia": antigo,
+                 "referencia_origem": "pagina" if antigo else None, "preco_no_pix": bool(pix)}
+        self._req("PATCH", "promocoes", params={"id": f"eq.{promocao_id}", "status": "eq.aprovada"}, corpo=corpo,
+                  prefer="return=minimal")
 
     def atualizar_produto(self, produto_id, preco, disponivel, preco_original):
         corpo = {"preco_atual": round(preco, 2), "disponivel": disponivel, "verificado_em": iso(agora())}

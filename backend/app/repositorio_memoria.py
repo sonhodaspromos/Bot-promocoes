@@ -21,8 +21,8 @@ CONFIG_PADRAO = {
     "publicacao.intervalo_minutos": 10, "publicacao.por_rodada": 2, "publicacao.max_por_dia": 60,
     "publicacao.feed_horario": 19, "filtros.desconto_minimo": 20, "filtros.nota_minima": 4.5,
     "filtros.repetir_apos_dias": 30, "monitor.ativo": True, "monitor.tolerancia_preco_pct": 5,
-    "monitor.acompanhar_dias": 7, "monitor.verificar_links": True,
-    "monitor.ler_preco_pagina": True, "monitor.intervalo_pagina_horas": 6, "transparencia.marcar_publi": True,
+    "monitor.acompanhar_dias": 30, "monitor.verificar_links": True,
+    "monitor.ler_preco_pagina": True, "monitor.intervalo_pagina_horas": 1, "monitor.max_por_rodada": 30, "transparencia.marcar_publi": True,
     "transparencia.aviso_afiliado": "Link de afiliado: posso ganhar comissão, sem custo extra para você.",
     "textos.chamada_instagram": "🔗 Link no nosso canal do Telegram (link na bio)",
     "textos.rodape_story": "Link no canal do Telegram", "textos.hashtags": "#achadinhos #promoção",
@@ -442,6 +442,30 @@ class MemoriaRepositorio(Repositorio):
                           "verificado_em": prod.get("verificado_em"), "link_id": link["id"] if link else None,
                           "link_url": link["url"] if link else None})
         return saida[:limite]
+
+    def aprovadas_para_conferir(self, limite):
+        saida = []
+        for pr in self.t["promocoes"]:
+            if pr["status"] != "aprovada":
+                continue
+            prod = self._um("produtos", id=pr["produto_id"])
+            mkt = self._um("marketplaces", id=prod["marketplace_id"])
+            link = next((l for l in self.t["links"] if l["produto_id"] == prod["id"] and l["ativo"]), None)
+            saida.append({"promocao_id": pr["id"], "produto_id": prod["id"], "preco_promocional": pr["preco_promocional"],
+                          "id_externo": prod["id_externo"], "marketplace": mkt["codigo"],
+                          "dominios": mkt["dominios_afiliado"], "dominios_destino": mkt.get("dominios_destino") or [],
+                          "verificado_em": prod.get("verificado_em"), "link_id": link["id"] if link else None,
+                          "link_url": link["url"] if link else None})
+        saida.sort(key=lambda x: (x["verificado_em"] is not None, x["verificado_em"] or 0))
+        return saida[:limite]
+
+    def sincronizar_oferta_na_fila(self, promocao_id, preco, preco_antigo, pix):
+        pr = self._um("promocoes", id=promocao_id)
+        if not pr or pr["status"] != "aprovada":
+            return
+        antigo = round(preco_antigo, 2) if preco_antigo and preco_antigo > preco else None
+        pr.update(preco_promocional=round(preco, 2), preco_referencia=antigo,
+                  referencia_origem="pagina" if antigo else None, preco_no_pix=bool(pix))
 
     def atualizar_produto(self, produto_id, preco, disponivel, preco_original):
         p = self._um("produtos", id=produto_id)

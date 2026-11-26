@@ -42,9 +42,15 @@ class ServicoMonitor:
         self.resolver = resolver
         self.relogio = relogio or (lambda: datetime.now(timezone.utc))
 
-    def executar(self, cfg: dict, limite: int = 15) -> int:
+    def executar(self, cfg: dict, limite: int | None = None) -> int:
         if not ajuste(cfg, "monitor.ativo"):
             return 0
+        if limite is None:  # quantas ofertas por rodada (publicadas + fila, cada grupo)
+            try:
+                limite = max(1, min(200, int(cfg.get("monitor.max_por_rodada") or 30)))
+            except (TypeError, ValueError):
+                limite = 30
+        self._pagina_bloqueada = None  # a loja pediu verificação de robô: para de ler páginas nesta rodada
         verificadas = 0
         for it in self.repo.publicadas_para_monitorar(int(num(cfg, "monitor.acompanhar_dias")), limite):
             fonte = self.fontes.get(it["marketplace"])
@@ -71,17 +77,63 @@ class ServicoMonitor:
                 self.log.aviso("monitor", "Loja fora do ar agora; confiro depois", erro=str(e))
             except (ErroIntegracao, ErroBanco) as e:
                 self.log.erro("monitor", "Falha ao conferir oferta", promocao_id=it["promocao_id"], erro=str(e))
+        if cfg.get("monitor.conferir_fila", True) and cfg.get("monitor.ler_preco_pagina", True):
+            verificadas += self._conferir_fila(cfg, limite)
         return verificadas
+
+    def _conferir_fila(self, cfg: dict, limite: int) -> int:
+        """Ofertas na FILA (ainda não publicadas) de lojas sem API: lê a página a cada monitor.intervalo_pagina_horas.
+        Preço subiu além da tolerância ou esgotou → o banco pausa; senão a oferta passa a ter o preço de agora
+        (nada foi divulgado com o preço antigo). Assim o post nunca sai com preço velho."""
+        horas = float(cfg.get("monitor.intervalo_pagina_horas") or 1)
+        feitas = 0
+        try:
+            itens = self.repo.aprovadas_para_conferir(limite)
+        except (ErroBanco, NotImplementedError):
+            return 0
+        for it in itens:
+            if getattr(self, "_pagina_bloqueada", None):
+                break
+            if it["marketplace"] not in LER_PAGINA or not it.get("link_url"):
+                continue
+            if _recente(it.get("verificado_em"), horas, self.relogio()):
+                continue
+            try:
+                dominios = list(it.get("dominios") or []) + list(it.get("dominios_destino") or [])
+                d = ler_pagina(self.http, it["link_url"], dominios, resolver=self.resolver)
+                self._anotar_bloqueio(d)
+                if d.get("quebrado"):
+                    if it.get("link_id"):
+                        self.repo.invalidar_link(it["link_id"], d["erro"])
+                    self.log.info("monitor", f"Fila: link invalidado ({d['erro']})", promocao_id=it["promocao_id"])
+                elif not d.get("preco"):
+                    self.log.aviso("monitor", f"Fila: não deu para ler o preço da página ({d.get('erro')})",
+                                   promocao_id=it["promocao_id"])
+                    continue
+                else:
+                    self.repo.atualizar_produto(it["produto_id"], d["preco"], d["disponivel"], d.get("preco_antigo"))
+                    self.repo.sincronizar_oferta_na_fila(it["promocao_id"], d["preco"], d.get("preco_antigo"),
+                                                         d.get("preco_pix", False))
+                    if abs(d["preco"] - float(it["preco_promocional"])) >= 0.01:
+                        self.log.info("monitor", f"Fila: preço atualizado de R$ {float(it['preco_promocional']):.2f} "
+                                                 f"para R$ {d['preco']:.2f}", promocao_id=it["promocao_id"])
+                feitas += 1
+            except LinkTemporariamenteIndisponivel as e:
+                self.log.aviso("monitor", "Loja fora do ar agora; confiro depois", erro=str(e))
+            except (ErroIntegracao, ErroBanco) as e:
+                self.log.erro("monitor", "Falha ao conferir oferta da fila", promocao_id=it["promocao_id"], erro=str(e))
+        return feitas
 
     def _conferir_pagina(self, it: dict, cfg: dict) -> bool:
         """True = resolvido pela leitura da página (atualizou o preço ou invalidou o link).
         False = ainda não é hora (conferida há menos de monitor.intervalo_pagina_horas) ou não deu para ler o
         preço: segue a conferência simples do link, como antes."""
-        horas = float(cfg.get("monitor.intervalo_pagina_horas") or 6)
-        if _recente(it.get("verificado_em"), horas, self.relogio()):
+        horas = float(cfg.get("monitor.intervalo_pagina_horas") or 1)
+        if _recente(it.get("verificado_em"), horas, self.relogio()) or getattr(self, "_pagina_bloqueada", None):
             return False
         dominios = list(it.get("dominios") or []) + list(it.get("dominios_destino") or [])
         d = ler_pagina(self.http, it["link_url"], dominios, resolver=self.resolver)
+        self._anotar_bloqueio(d)
         if d.get("quebrado"):
             self.repo.invalidar_link(it["link_id"], d["erro"])
             self.log.info("monitor", f"Link invalidado: {d['erro']}", promocao_id=it["promocao_id"])
@@ -92,3 +144,9 @@ class ServicoMonitor:
         self.repo.atualizar_produto(it["produto_id"], d["preco"], d["disponivel"], d.get("preco_antigo"))
         self.log.info("monitor", f"Preço conferido na página: R$ {d['preco']:.2f}", promocao_id=it["promocao_id"])
         return True
+
+    def _anotar_bloqueio(self, d: dict) -> None:
+        """Loja pediu verificação de robô: não insiste nesta rodada (evita piorar o bloqueio); tenta na próxima."""
+        if "robô" in str(d.get("erro") or "") and not getattr(self, "_pagina_bloqueada", None):
+            self._pagina_bloqueada = d["erro"]
+            self.log.aviso("monitor", "A loja pediu verificação de robô: leitura de páginas pausada até a próxima rodada")

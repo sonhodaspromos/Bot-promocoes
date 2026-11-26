@@ -9,7 +9,7 @@ PADROES = {
     "publicacao.intervalo_minutos": 10, "publicacao.por_rodada": 2, "publicacao.max_por_dia": 60,
     "publicacao.feed_horario": 19, "filtros.desconto_minimo": 20, "filtros.nota_minima": 4.5,
     "filtros.repetir_apos_dias": 30, "monitor.ativo": True, "monitor.tolerancia_preco_pct": 5,
-    "monitor.acompanhar_dias": 7, "monitor.verificar_links": True, "busca.palavras_por_execucao": 3,
+    "monitor.acompanhar_dias": 30, "monitor.verificar_links": True, "busca.palavras_por_execucao": 3,
     "busca.ofertas_por_palavra": 30, "sistema.fuso_horario": "America/Recife",
     "inteligencia.janela_repeticao_horas": 24, "inteligencia.verificar_imagem": True,
     "cupons.ativo": True, "cupons.max_stories_dia": 3, "cupons.publicar_telegram": True, "cupons.horario": 9,
