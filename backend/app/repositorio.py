@@ -609,7 +609,7 @@ class SupabaseRepositorio(Repositorio):
         linhas = self._get(
             "promocoes",
             select="id,produto_id,preco_promocional,produtos!inner(id_externo,verificado_em,"
-                   "marketplaces!inner(codigo,dominios_afiliado))",
+                   "marketplaces!inner(codigo,dominios_afiliado,dominios_destino))",
             status="eq.publicada", publicada_em=f"gte.{iso(agora() - timedelta(days=dias))}",
             order="produtos(verificado_em).asc.nullsfirst", limit=str(limite))
         resultado = []
@@ -620,6 +620,8 @@ class SupabaseRepositorio(Repositorio):
                 "promocao_id": l["id"], "produto_id": l["produto_id"], "preco_promocional": float(l["preco_promocional"]),
                 "id_externo": l["produtos"]["id_externo"], "marketplace": l["produtos"]["marketplaces"]["codigo"],
                 "dominios": l["produtos"]["marketplaces"]["dominios_afiliado"],
+                "dominios_destino": l["produtos"]["marketplaces"].get("dominios_destino") or [],
+                "verificado_em": l["produtos"].get("verificado_em"),
                 "link_id": link[0]["id"] if link else None,
                 "link_url": (link[0]["url_curta"] or link[0]["url"]) if link else None})
         return resultado

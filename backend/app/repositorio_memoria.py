@@ -21,7 +21,8 @@ CONFIG_PADRAO = {
     "publicacao.intervalo_minutos": 10, "publicacao.por_rodada": 2, "publicacao.max_por_dia": 60,
     "publicacao.feed_horario": 19, "filtros.desconto_minimo": 20, "filtros.nota_minima": 4.5,
     "filtros.repetir_apos_dias": 30, "monitor.ativo": True, "monitor.tolerancia_preco_pct": 5,
-    "monitor.acompanhar_dias": 7, "monitor.verificar_links": True, "transparencia.marcar_publi": True,
+    "monitor.acompanhar_dias": 7, "monitor.verificar_links": True,
+    "monitor.ler_preco_pagina": True, "monitor.intervalo_pagina_horas": 6, "transparencia.marcar_publi": True,
     "transparencia.aviso_afiliado": "Link de afiliado: posso ganhar comissão, sem custo extra para você.",
     "textos.chamada_instagram": "🔗 Link no nosso canal do Telegram (link na bio)",
     "textos.rodape_story": "Link no canal do Telegram", "textos.hashtags": "#achadinhos #promoção",
@@ -57,7 +58,8 @@ class MemoriaRepositorio(Repositorio):
         self.relogio = agora  # os testes trocam para simular a passagem do tempo
         for codigo, nome, doms, modo, padrao in [
                 ("shopee", "Shopee", ["s.shopee.com.br", "shope.ee"], "demo", r"^https://(s\.shopee\.com\.br|shope\.ee)/[A-Za-z0-9_-]+"),
-                ("mercado_livre", "Mercado Livre", ["mercadolivre.com"], "manual", r"^https://mercadolivre\.com/sec/[A-Za-z0-9]+"),
+                ("mercado_livre", "Mercado Livre", ["meli.la", "mercadolivre.com"], "manual",
+                 r"^https://(meli\.la/[A-Za-z0-9]+|mercadolivre\.com/sec/[A-Za-z0-9]+)"),
                 ("demo", "Loja de Demonstração", ["demo.invalid"], "demo", r"^https://demo\.invalid/"),
                 ("aliexpress", "AliExpress", ["s.click.aliexpress.com", "pt.aliexpress.com", "aliexpress.com"], "desativado", None),
                 ("amazon", "Amazon", ["amzn.to", "www.amazon.com.br", "amazon.com.br"], "desativado", None),
@@ -427,7 +429,8 @@ class MemoriaRepositorio(Repositorio):
             link = self._link_valido(prod["id"])
             saida.append({"promocao_id": pr["id"], "produto_id": prod["id"], "preco_promocional": pr["preco_promocional"],
                           "id_externo": prod["id_externo"], "marketplace": mkt["codigo"],
-                          "dominios": mkt["dominios_afiliado"], "link_id": link["id"] if link else None,
+                          "dominios": mkt["dominios_afiliado"], "dominios_destino": mkt.get("dominios_destino") or [],
+                          "verificado_em": prod.get("verificado_em"), "link_id": link["id"] if link else None,
                           "link_url": link["url"] if link else None})
         return saida[:limite]
 
