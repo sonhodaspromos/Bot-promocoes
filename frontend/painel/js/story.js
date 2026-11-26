@@ -2,7 +2,8 @@
 // num cartão acima da faixa "Clique aqui". No celular abre o menu de compartilhar (dá para escolher o
 // Instagram direto); no computador baixa o arquivo. O link vai à parte, para o adesivo de link.
 import { SUPABASE_URL } from "./config.js";
-import { brl } from "./ui.js";
+import { q } from "./api.js";
+import { aviso, brl, esc } from "./ui.js";
 
 const L = 1080, A = 1920, M = 60;
 let fontes;
@@ -136,4 +137,128 @@ export async function compartilharStory(blob, nome) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
   return "baixado";
+}
+
+// ---------------------------------------------------------------- story de cupom
+function descontoGrande(c) {
+  if (c.desconto_tipo === "percentual" && Number(c.desconto_valor)) return `${Number(c.desconto_valor)}% OFF`;
+  if (c.desconto_tipo === "valor" && Number(c.desconto_valor)) return `${brl(c.desconto_valor)} OFF`;
+  return "CUPOM";
+}
+
+/** Story do cupom no fundo da marca: loja, desconto grande, condições (nunca cortadas), código, validade e regras. */
+export async function desenharStoryCupom(c, cores = {}) {
+  const principal = cores.principal || "#DC1B63", realce = cores.destaque || "#FDC302";
+  await carregarFontes();
+  const fundo = await imagem(new URL("../img/story_fundo.png", import.meta.url).href, false);
+  const cv = document.createElement("canvas");
+  cv.width = L; cv.height = A;
+  const x = cv.getContext("2d");
+  if (fundo) x.drawImage(fundo, 0, 0, L, A); else { x.fillStyle = principal; x.fillRect(0, 0, L, A); }
+  const y0 = 90, y1 = Math.round(A * 0.70), area = L - 4 * M;
+  retangulo(x, M, y0, L - M, y1, 40); x.fillStyle = "#fff"; x.fill();
+  x.lineWidth = 6; x.strokeStyle = principal; x.stroke();
+
+  let cx = M + 20;
+  for (const [t, cor] of [...(c.demo ? [["DEMONSTRAÇÃO", "#6B21A8"]] : []), ["PUBLI", "#222222"]]) {
+    x.font = "700 26px PoppinsArte, system-ui, sans-serif";
+    const w = x.measureText(t).width + 30;
+    retangulo(x, cx, y0 + 20, cx + w, y0 + 62, 20); x.fillStyle = cor; x.fill();
+    x.fillStyle = "#fff"; x.textAlign = "left"; x.textBaseline = "middle"; x.fillText(t, cx + 15, y0 + 41);
+    cx += w + 10;
+  }
+
+  // conteúdo centralizado na altura do cartão: 1ª passada mede (num canvas de rascunho), 2ª desenha
+  const conteudo = (x, y) => {
+    x.textAlign = "center"; x.textBaseline = "top";
+    x.font = "700 46px PoppinsArte, system-ui, sans-serif"; x.fillStyle = "#555";
+    x.fillText(`CUPOM ${String(c.marketplace_nome || "").toUpperCase()}`.slice(0, 40), L / 2, y); y += 80;
+    let tam = 170;
+    x.font = `700 ${tam}px PoppinsArte, system-ui, sans-serif`; x.fillStyle = principal;
+    const grande = descontoGrande(c);
+    while (x.measureText(grande).width > area && tam > 60) { tam -= 6; x.font = `700 ${tam}px PoppinsArte, system-ui, sans-serif`; }
+    x.fillText(grande, L / 2, y); y += tam + 40;
+    const cond = [c.desconto_maximo ? `até ${brl(c.desconto_maximo)} de desconto` : "", c.valor_minimo ? `em compras acima de ${brl(c.valor_minimo)}` : ""].filter(Boolean);
+    x.font = "400 46px PoppinsArte, system-ui, sans-serif"; x.fillStyle = "#333";
+    for (const linha of cond.flatMap((t) => quebrar(x, t, area, 2))) { x.fillText(linha, L / 2, y); y += 60; }
+    y += 40;
+    if (c.codigo) {
+      x.font = "400 40px PoppinsArte, system-ui, sans-serif"; x.fillStyle = "#555";
+      x.fillText("use este código no pagamento", L / 2, y); y += 64;
+      x.font = "700 100px PoppinsArte, system-ui, sans-serif";
+      const w = Math.min(area, x.measureText(c.codigo).width + 90);
+      x.setLineDash([18, 12]); x.lineWidth = 5; x.strokeStyle = principal;
+      retangulo(x, (L - w) / 2, y, (L + w) / 2, y + 150, 26); x.fillStyle = realce; x.fill(); x.stroke(); x.setLineDash([]);
+      x.fillStyle = "#000"; x.textBaseline = "middle"; x.fillText(c.codigo, L / 2, y + 77); x.textBaseline = "top";
+      y += 200;
+    } else {
+      x.font = "700 50px PoppinsArte, system-ui, sans-serif"; x.fillStyle = "#333";
+      x.fillText("desconto direto no link", L / 2, y); y += 100;
+    }
+    const fim = c.fim_em ? new Date(c.fim_em) : null;
+    if (fim && !isNaN(fim)) {
+      x.font = "700 44px PoppinsArte, system-ui, sans-serif"; x.fillStyle = principal;
+      x.fillText(`Válido até ${fim.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "America/Recife" })} às ${fim.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Recife" })}`, L / 2, y);
+      y += 74;
+    }
+    if (c.regras) {
+      x.font = "400 36px PoppinsArte, system-ui, sans-serif"; x.fillStyle = "#666";
+      for (const linha of quebrar(x, c.regras, area, 4)) { x.fillText(linha, L / 2, y); y += 48; }
+    }
+    return y;
+  };
+  const rascunho = document.createElement("canvas").getContext("2d");
+  const altura = conteudo(rascunho, 0);
+  const topo = y0 + 80, livre = y1 - 30 - topo;
+  conteudo(x, topo + Math.max(0, (livre - altura) / 2));
+  return { canvas: cv, semFoto: false };
+}
+
+// ---------------------------------------------------------------- janela de prévia (ofertas e cupons)
+let coresCache;
+async function coresDaMarca(ctx) {
+  if (coresCache) return coresCache;
+  const cfg = await q(ctx.sb.from("configuracoes").select("chave,valor").in("chave", ["visual.cor_principal", "visual.cor_destaque"]));
+  const v = Object.fromEntries(cfg.map((c) => [c.chave, c.valor]));
+  const cor = (x) => (/^#[0-9a-f]{6}$/i.test(x || "") ? x : null);
+  return (coresCache = { principal: cor(v["visual.cor_principal"]), destaque: cor(v["visual.cor_destaque"]) });
+}
+
+/** Abre a prévia do story com "Compartilhar / salvar" e "Copiar link do adesivo". */
+export async function janelaStory(ctx, { desenhar, nome, link, nota = "" }) {
+  const janela = document.createElement("div");
+  janela.className = "janela-story";
+  janela.setAttribute("role", "dialog"); janela.setAttribute("aria-modal", "true"); janela.setAttribute("aria-label", "Story para o Instagram");
+  janela.innerHTML = '<div class="caixa"><p class="muted centro">Montando o story…</p></div>';
+  document.body.appendChild(janela);
+  const fechar = () => janela.remove();
+  janela.addEventListener("click", (e) => { if (e.target === janela) fechar(); });
+  try {
+    const { canvas, semFoto } = await desenhar(await coresDaMarca(ctx));
+    const blob = await new Promise((ok) => canvas.toBlob(ok, "image/jpeg", 0.92));
+    const url = URL.createObjectURL(blob);
+    janela.innerHTML = `<div class="caixa">
+      <img src="${url}" alt="Prévia do story">
+      ${semFoto ? '<p class="m" style="color:var(--aviso)">A loja não liberou a foto para o painel: o story saiu sem ela. Você pode pôr a foto por cima no Instagram.</p>' : ""}
+      <button class="b p grande" data-x="compartilhar">📲 Compartilhar / salvar imagem</button>
+      ${link ? '<button class="b grande" data-x="copiar">🔗 Copiar link do adesivo</button>' : '<p class="m">Sem link de afiliado: o story divulga só o código.</p>'}
+      <p class="m">No Instagram: crie o story com a imagem${link ? ", toque no ícone de adesivos → <b>Link</b>, cole o link e ponha o adesivo em cima da faixa “Clique aqui”" : ""}.
+        ${nota ? `<br>${esc(nota)}` : ""}</p>
+      <button class="b grande" data-x="fechar">Fechar</button></div>`;
+    janela.addEventListener("click", async (e) => {
+      const x = e.target.closest("[data-x]")?.dataset.x;
+      if (x === "fechar") { URL.revokeObjectURL(url); fechar(); }
+      if (x === "compartilhar") {
+        const r = await compartilharStory(blob, nome);
+        if (r === "baixado") aviso("Imagem baixada ✔ (no iPhone, também dá para tocar e segurar a prévia)");
+      }
+      if (x === "copiar") {
+        try { await navigator.clipboard.writeText(link); aviso("Link copiado ✔"); }
+        catch { prompt("Copie o link:", link); }
+      }
+    });
+  } catch (e) {
+    janela.innerHTML = `<div class="caixa"><p>Erro ao montar o story: ${esc(e.message)}</p><button class="b grande" data-x="fechar">Fechar</button></div>`;
+    janela.querySelector("[data-x]").addEventListener("click", fechar);
+  }
 }
