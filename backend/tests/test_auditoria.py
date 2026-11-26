@@ -168,7 +168,8 @@ def test_link_no_dominio_da_loja_mas_sem_atribuicao_e_recusado():
 
 
 def test_link_que_redireciona_para_a_pagina_inicial_perdeu_a_atribuicao():
-    sessao = SessaoFalsa().quando("GET", "AbC999", RespostaFalsa(200, url="https://shopee.com.br/"))
+    sessao = (SessaoFalsa().quando("GET", "AbC999", RespostaFalsa(302, headers={"Location": "https://shopee.com.br/"}))
+              .quando("GET", "shopee.com.br/", RespostaFalsa(200)))
     r = validar_link("https://s.shopee.com.br/AbC999", ["s.shopee.com.br"], cliente(sessao, tentativas=1))
     assert not r.valido and "página inicial" in r.motivo
 
@@ -457,10 +458,15 @@ def test_backend_funciona_antes_da_migration_015():
         return RespostaFalsa(200, [{"id": 1, "url": "https://s.shopee.com.br/x", "produto_id": 2,
                                     "produtos": {"demo": False, "marketplaces": {"codigo": "shopee", "dominios_afiliado": ["s.shopee.com.br"]}}}])
     sessao = (SessaoFalsa().quando("GET", "links_afiliados", links)
-              .quando("POST", "rpc/fila_marcar_publicando", RespostaFalsa(404, {"code": "PGRST202", "message": "function not found"})))
+              .quando("POST", "rpc/fila_reservar_envio", RespostaFalsa(404, {"code": "PGRST202", "message": "function not found"})))
     repo = SupabaseRepositorio("https://abc.supabase.co", "sb_secret_x", cliente(sessao, tentativas=1))
-    assert repo.links_pendentes(5)[0]["padrao"] is None
+    assert repo.links_pendentes(5)[0]["padrao"] is None       # leitura continua funcionando sem as migrations novas
     log = novo_log()
     pub = ServicoPublicacao(repo, {}, log, url_supabase="https://abc.supabase.co")
-    pub._marcar_publicando(type("I", (), {"id": 1})())          # não quebra: só avisa
-    assert any("migration 015" in l["mensagem"] for l in log.pendentes)
+    # (auditoria corretiva P0) antes: sem a RPC de proteção o bot só AVISAVA e enviava assim mesmo.
+    # Agora: sem gravar a reserva, nada é enviado e a publicação para.
+    import pytest
+    from app.erros import ErroBanco
+    with pytest.raises(ErroBanco):
+        pub._reservar_envio(type("I", (), {"id": 1, "promocao_id": 9})(), None, "telegram")
+    assert any("NADA foi enviado" in l["mensagem"] and l["nivel"] == "CRITICO" for l in log.pendentes)

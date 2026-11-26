@@ -26,6 +26,12 @@ CREDENCIAIS = {
     "telegram": [("TELEGRAM_TOKEN", "TOKEN"), ("TELEGRAM_CANAL", "CANAL")],
     "instagram": [("IG_TOKEN", "TOKEN"), ("IG_USER_ID", "USER_ID")],
     "imgbb": [("IMGBB_KEY", "KEY")],
+    # expansão modular (só valem com a flag recursos.* ligada e validação real aprovada)
+    "aliexpress": [("ALIEXPRESS_APP_KEY", "APP_KEY"), ("ALIEXPRESS_APP_SECRET", "APP_SECRET"),
+                   ("ALIEXPRESS_TRACKING_ID", "TRACKING_ID")],
+    "amazon": [("AMAZON_CREDENTIAL_ID", "CREDENTIAL_ID"), ("AMAZON_CREDENTIAL_SECRET", "CREDENTIAL_SECRET"),
+               ("AMAZON_PARTNER_TAG", "PARTNER_TAG")],   # AMAZON_TOKEN_URL/AMAZON_API_URL: opcionais (ver fontes/amazon.py)
+    "whatsapp": [("WHATSAPP_TOKEN", "TOKEN"), ("WHATSAPP_PHONE_ID", "PHONE_ID"), ("WHATSAPP_TEMPLATE", "TEMPLATE")],
 }
 
 

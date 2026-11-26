@@ -12,10 +12,18 @@ Recuperação de falhas (auditoria):
   * resultado incerto (timeout depois de enviar) → o item NÃO é repetido (evita post duplicado);
   * banco fora do ar → para de publicar na hora; o que já foi enviado fica marcado como
     "publicando" e o banco nunca o publica de novo sozinho.
+
+Auditoria corretiva P0:
+  * antes de QUALQUER envio, o item é reservado com exclusividade no banco (fila_reservar_envio).
+    Se a reserva não for gravada (erro, RPC ausente, trava vencida), NADA é enviado;
+  * antes do primeiro envio real da rodada, o esquema do banco é conferido (migrations e RPCs);
+  * qualquer falha DEPOIS de chamar o canal (5xx, conexão caída, resposta ilegível, erro ao gravar o
+    resultado) é tratada como resultado incerto: o item nunca é reenviado automaticamente;
+  * em produção, só publica link com atribuição de afiliado comprovada recentemente.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from ..cliente_http import ClienteHTTP
 from ..erros import ErroBanco, ErroIntegracao, RegraViolada
@@ -25,29 +33,45 @@ from ..modelos import ConteudoPublicacao, ItemFila, ResultadoValidacao
 from ..repositorio import Repositorio
 from . import arte, textos
 from .cupons import melhor_cupom
+from ..rede import ImagemRecusada, baixar_imagem
 from .comum import agora_utc, ajuste, dentro_do_horario, fuso, inicio_do_dia, num
 from .validacao import LinkTemporariamenteIndisponivel, validar_link
+from ..requisitos import faltando_para_publicar
+from ..recursos import ligado
+from ..inteligencia.experimentos import atribuir as atribuir_variante
 
 CANAIS_POR_OFERTA = ("telegram", "instagram_story")  # o feed recebe só a oferta imperdível do dia
 
 
 class ServicoPublicacao:
     def __init__(self, repo: Repositorio, canais: dict[str, CanalPublicacao], log: Log, *,
-                 url_supabase: str, http: ClienteHTTP | None = None, relogio=agora_utc):
+                 url_supabase: str, http: ClienteHTTP | None = None, relogio=agora_utc, fontes: dict | None = None):
         self.repo, self.canais, self.log = repo, canais, log
+        self.fontes = fontes or {}  # para reconferir o preço na loja imediatamente antes de publicar
         self.url_cliques = url_supabase.rstrip("/") + "/functions/v1/r"
         self.http = http or ClienteHTTP("validacao", tentativas=2)
         self.relogio = relogio
         self.canais_bloqueados: dict[str, str] = {}  # canal → motivo (token vencido nesta rodada)
         self._cota: dict[str, int | None] = {}       # cota restante do Instagram, consultada 1x por rodada
+        self._bloqueio_real: str | None = None       # motivo para não publicar em canal real nesta rodada
+        from .selecao import ServicoSelecao
+        self.selecao = ServicoSelecao(repo, log, relogio=self.relogio)
+        self._experimento: dict | None | bool = False   # False = ainda não consultado nesta rodada
+        self._extras: dict[int, dict] = {}              # variante A/B de cada item publicado
+        self._requisitos_conferidos = False
 
     # ------------------------------------------------------------ 1. validar links
     def validar_links(self, cfg: dict, limite: int = 30) -> tuple[int, int]:
         ok = recusados = 0
-        for p in self.repo.links_pendentes(limite):
+        exigir = bool(cfg.get("links.exigir_atribuicao"))
+        horas = float(cfg.get("links.validade_atribuicao_horas") or 72) if exigir else None
+        for p in self.repo.links_pendentes(limite, revalidar_atribuicao_horas=horas):
             try:
                 r = validar_link(p["url"], p["dominios"], self.http, demo=p["demo"], padrao=p.get("padrao"),
-                                 verificar_http=bool(ajuste(cfg, "monitor.verificar_links")))
+                                 verificar_http=bool(ajuste(cfg, "monitor.verificar_links")),
+                                 dominios_destino=p.get("dominios_destino"), parametros_afiliado=p.get("parametros_afiliado"),
+                                 id_afiliado=p.get("id_afiliado"),
+                                 exigir_atribuicao=bool(cfg.get("links.exigir_atribuicao")) and not p["demo"])
             except LinkTemporariamenteIndisponivel as e:
                 self.log.aviso("validacao", "Link não pôde ser verificado agora; tento na próxima rodada", erro=str(e))
                 continue
@@ -83,18 +107,105 @@ class ServicoPublicacao:
             else:
                 hoje = {p["promocao_id"] for p in self.repo.publicacoes_desde(inicio_do_dia(cfg, agora), list(CANAIS_POR_OFERTA))}
                 vagas = int(num(cfg, "publicacao.max_por_dia")) - len(hoje)
-                selecionadas += automaticas[: max(0, min(int(num(cfg, "publicacao.por_rodada")), vagas))]
+                quantas = max(0, min(int(num(cfg, "publicacao.por_rodada")), vagas))
+                selecionadas += self._selecionar(automaticas, quantas, cfg)
 
         n = 0
+        alvos, regras = self._canais_alvo(cfg, canais)
+        agendar = ligado(cfg, "agendamento_inteligente")
+        ultimos: dict[int, datetime | None] = {}
         for promo in selecionadas:
-            for codigo in CANAIS_POR_OFERTA:
+            for codigo in alvos:
                 canal = canais.get(codigo)
-                if canal and self._pode_ir(promo, codigo, canal["id"], cfg):
+                if not canal or not self._categoria_permitida(promo, canal["id"], regras):
+                    continue
+                if self._pode_ir(promo, codigo, canal["id"], cfg) and not self._saturado(promo, codigo, cfg):
                     prioridade = 1 if promo.get("origem") == "manual" else 5
-                    if self.repo.enfileirar(promo["id"], canal["id"], promo["link_id"], prioridade):
+                    quando = None
+                    if agendar and promo.get("origem") != "manual":
+                        quando = self._agendar(cfg, agora, canal["id"], ultimos, promo["id"], codigo)
+                    if self.repo.enfileirar(promo["id"], canal["id"], promo["link_id"], prioridade,
+                                            *((quando,) if quando else ())):
                         n += 1
+                        if quando:
+                            ultimos[canal["id"]] = quando
         n += self._enfileirar_feed(cfg, agora, canais)
         return n
+
+    def _canais_alvo(self, cfg: dict, canais: dict) -> tuple[list[str], dict[int, list[int]]]:
+        """Padrão: telegram + story. Com recursos.canais_por_categoria: também os canais extras de Telegram
+        cadastrados (ex.: telegram_casa) e as regras de categoria de cada canal."""
+        if not ligado(cfg, "canais_por_categoria"):
+            return list(CANAIS_POR_OFERTA), {}
+        extras = [c for c, row in canais.items() if c not in CANAIS_POR_OFERTA and c != "instagram_feed"
+                  and row.get("tipo") == "telegram"]
+        try:
+            regras = self.repo.canais_categorias()
+        except ErroBanco as e:
+            # sem as regras não dá para saber o que cada canal extra aceita: publica só nos canais padrão
+            self.log.aviso("publicacao", "Regras de canais por categoria indisponíveis; canais extras pulados nesta rodada",
+                           erro=str(e))
+            return list(CANAIS_POR_OFERTA), {}
+        return list(CANAIS_POR_OFERTA) + sorted(extras), regras
+
+    @staticmethod
+    def _categoria_permitida(promo: dict, canal_id: int, regras: dict[int, list[int]]) -> bool:
+        permitidas = regras.get(canal_id)
+        return not permitidas or promo.get("categoria_id") in permitidas
+
+    def _agendar(self, cfg: dict, agora, canal_id: int, ultimos: dict, promocao_id: int | None = None,
+                 canal_codigo: str | None = None):
+        from .agendamento import proximo_horario
+        if canal_id not in ultimos:
+            try:
+                ultimos[canal_id] = self.repo.ultimo_agendado(canal_id)
+            except ErroBanco:
+                ultimos[canal_id] = None
+        try:
+            ap, _ = self.selecao.contexto(cfg)
+        except Exception:
+            ap = None
+        exp = self._experimento_ativo()
+        if exp and exp.get("tipo") == "horario" and promocao_id is not None and \
+                atribuir_variante(exp["id"], promocao_id, canal_codigo or str(canal_id)) == "B":
+            ap = None   # variante B do A/B de horário: próximo horário livre, sem o aprendizado
+        h = proximo_horario(cfg, agora, ultimos[canal_id], ap)
+        self.log.info("agendamento", f"Canal {canal_id}: post agendado para {h.quando.isoformat()} ({h.explicacao})")
+        return h.quando
+
+    def _selecionar(self, automaticas: list[dict], quantas: int, cfg: dict) -> list[dict]:
+        """Ranking comercial (receita esperada sem sacrificar qualidade) com explicação de cada decisão.
+        Se a seleção falhar, usa a ordem por nota do motor (comportamento anterior) e avisa."""
+        try:
+            decisoes = self.selecao.ordenar(automaticas, cfg)
+        except Exception as e:  # nunca impede a publicação
+            self.log.aviso("selecao", "Seleção comercial indisponível nesta rodada; uso a ordem por nota do motor",
+                           erro=f"{type(e).__name__}: {e}")
+            return automaticas[:quantas]
+        por_id = {c["id"]: c for c in automaticas}
+        escolhidas = []
+        for d in decisoes:
+            if not d.selecionada:
+                continue
+            if len(escolhidas) < quantas:
+                escolhidas.append(por_id[d.promocao_id])
+            else:
+                d.selecionada = False
+                d.recusa = f"sem vaga nesta rodada ({d.posicao}º lugar; limite de {quantas} por rodada/dia)"
+        self.selecao.registrar(decisoes)
+        return escolhidas
+
+    def _saturado(self, promo: dict, codigo: str, cfg: dict) -> bool:
+        """Canal com queda forte de cliques: nesta rodada só ofertas excelentes (manuais sempre passam)."""
+        if promo.get("origem") == "manual" or promo.get("classificacao") == "excelente":
+            return False
+        try:
+            motivo = self.selecao.canal_saturado(cfg, codigo)
+        except Exception:
+            return False
+        if motivo:
+            self.log.info("selecao", f"Oferta não enviada a {codigo}: {motivo}", promocao_id=promo.get("id"))
+        return bool(motivo)
 
     def _pode_ir(self, promo: dict, codigo: str, canal_id: int | None = None, cfg: dict | None = None) -> bool:
         if promo.get("demo") and self.canais[codigo].modo == "real":
@@ -137,7 +248,9 @@ class ServicoPublicacao:
     def processar_fila(self, cfg: dict, limite: int = 10) -> tuple[int, int]:
         canais_por_id = {c["id"]: c for c in self.repo.canais()}
         ok = falhas = 0
+        self._cfg = cfg
         fotos: dict[int, bytes | None] = {}
+        self.conferir_requisitos()
         itens = self.repo.pegar_fila(limite)
         for n, item in enumerate(itens):
             canal_db = canais_por_id.get(item.canal_id) or {}
@@ -145,6 +258,12 @@ class ServicoPublicacao:
             canal = self.canais.get(codigo)
             if codigo in self.canais_bloqueados:
                 self._devolver(item, 60, f"canal pausado nesta rodada: {self.canais_bloqueados[codigo]}")
+                continue
+            if canal is not None and canal.modo == "real" and self._bloqueio_real:
+                self._devolver(item, 60, f"publicação real bloqueada: {self._bloqueio_real}")
+                continue
+            if canal is not None and canal.modo == "real" and self.parada_ativa():
+                self._devolver(item, 30, "parada de emergência ligada: nenhuma publicação real")
                 continue
             try:
                 resultado = self._publicar_item(item, canal, codigo, cfg, fotos)
@@ -163,9 +282,23 @@ class ServicoPublicacao:
     def _publicar_item(self, item: ItemFila, canal, codigo: str, cfg: dict, fotos: dict) -> bool:
         """Publica um item. True = publicado. Lança ErroBanco se o banco cair (o chamador interrompe)."""
         dados = self.repo.dados_publicacao(item.promocao_id)
+        if dados and dados.get("classificacao") is None and dados.get("status") in ("aprovada", "publicada"):
+            self._devolver(item, 15, "aguardando nova análise (preço, estoque ou link mudou)")
+            return False
         erro = self._checar(item, dados, canal)
         if erro:
             return self._registrar_falha(item, codigo, erro)
+        if canal.modo == "real":
+            motivo = self._atribuicao_pendente(dados, cfg)
+            if motivo:
+                self.log.aviso("publicacao", f"{codigo}: não publicado — {motivo}", promocao_id=item.promocao_id)
+                self._devolver(item, 60, motivo)
+                return False
+            motivo = self._preco_mudou(dados, cfg)
+            if motivo:
+                self.log.aviso("publicacao", f"{codigo}: não publicado — {motivo}", promocao_id=item.promocao_id)
+                self._devolver(item, 15, motivo)
+                return False
         try:
             conteudo = self._montar(item, dados, canal, cfg, fotos)
         except Exception as e:  # arte/legenda com problema: falha registrada, nada foi enviado
@@ -176,19 +309,68 @@ class ServicoPublicacao:
             self.log.aviso("publicacao", f"{codigo}: cota de publicações da API esgotada; volta mais tarde")
             self._devolver(item, 60, "cota diária da API do Instagram esgotada")
             return False
-        self._marcar_publicando(item)
+        if not self._reservar_envio(item, canal, codigo):
+            return False
+        # ---- a partir daqui o canal pode ter recebido o post: nada volta para a fila automaticamente
         try:
             id_msg = canal.publicar(conteudo)
         except ErroIntegracao as e:
             return self._tratar_erro_canal(item, canal, codigo, e)
+        except Exception as e:  # resposta inesperada do canal depois do envio: pode ter publicado
+            return self._tratar_erro_canal(item, canal, codigo, ErroIntegracao(
+                f"{codigo}: falha inesperada durante o envio ({type(e).__name__}: {e})", servico=codigo, incerto=True))
         try:
-            self.repo.registrar_publicacao(item, True, id_msg, None)
+            extras = self._extras.get(item.id)   # só passa quando há teste A/B (compatível com repositórios antigos)
+            self.repo.registrar_publicacao(item, True, id_msg, None, *((extras,) if extras else ()))
         except RegraViolada as e:
-            self.log.critico("publicacao", "O banco recusou registrar a publicação", codigo=e.codigo, erro=str(e))
+            self.log.critico("publicacao", "O banco recusou registrar a publicação (o post SAIU no canal)",
+                             codigo=e.codigo, erro=str(e), mensagem=id_msg, promocao_id=item.promocao_id)
             return False
+        except ErroBanco as e:
+            # post enviado, resultado não gravado: o item continua reservado e o banco o encerra como
+            # "resultado incerto" — nunca é reenviado. Registro no log para conferência manual.
+            self.log.critico("publicacao", f"{codigo}: post ENVIADO, mas o banco não gravou o resultado. "
+                             "Não será reenviado; confira o canal.", mensagem=id_msg, promocao_id=item.promocao_id,
+                             fila_id=item.id, erro=str(e))
+            raise
         self.log.info("publicacao", f"{canal.codigo}: publicado ({'DEMO' if canal.modo != 'real' else 'real'})",
                       promocao_id=item.promocao_id, mensagem=id_msg)
         return True
+
+    def parada_ativa(self) -> bool:
+        """Lida do banco na hora (não do cache da rodada): o botão de emergência vale no envio seguinte."""
+        try:
+            return bool(self.repo.parada_emergencia())
+        except ErroBanco:
+            return True  # sem conseguir confirmar, não publica de verdade
+
+    def _preco_mudou(self, dados: dict, cfg: dict) -> str | None:
+        """Reconfere preço e estoque na loja imediatamente antes de publicar. Devolve o motivo para NÃO publicar."""
+        prod = self.repo.produto(dados["produto_id"]) if dados.get("produto_id") else None
+        if not prod:
+            return "produto não encontrado para reconferir o preço"
+        fonte = self.fontes.get(prod["marketplace"])
+        preco_post = float(dados["preco_promocional"])
+        if fonte is not None and getattr(fonte, "suporta_consulta", False) and fonte.modo == "real":
+            try:
+                atual = fonte.consultar(prod["id_externo"])
+            except (ErroIntegracao, ValueError) as e:
+                return f"não consegui reconferir o preço na loja ({e})"
+            if atual is None or not atual.disponivel:
+                self.repo.atualizar_produto(prod["id"], preco_post, False, None)
+                return "produto indisponível na loja no momento da publicação"
+            if abs(atual.preco - preco_post) > max(0.01, preco_post * 0.005):
+                self.repo.atualizar_produto(prod["id"], atual.preco, True, atual.preco_original)
+                return f"preço mudou na loja ({preco_post:.2f} → {atual.preco:.2f}): nova análise antes de publicar"
+            return None
+        # loja sem consulta (ex.: Mercado Livre manual): o preço precisa ter sido conferido recentemente
+        horas = float(cfg.get("publicacao.validade_preco_horas") or 24)
+        conferido = prod.get("verificado_em")
+        if isinstance(conferido, str):
+            conferido = datetime.fromisoformat(conferido.replace("Z", "+00:00"))
+        if not conferido or self.relogio() - conferido > timedelta(hours=horas):
+            return f"preço sem conferência há mais de {horas:.0f} h: confirme o preço no painel"
+        return None
 
     def _sem_cota(self, canal, codigo) -> bool:
         consultar = getattr(canal, "cota_restante", None)
@@ -235,15 +417,56 @@ class ServicoPublicacao:
             self.log.erro("publicacao", "Não consegui registrar a falha", erro=str(e))
         return False
 
-    def _marcar_publicando(self, item) -> None:
+    def _experimento_ativo(self) -> dict | None:
+        if self._experimento is False:
+            try:
+                self._experimento = self.repo.experimento_ativo()
+            except ErroBanco:
+                self._experimento = None
+        return self._experimento or None
+
+    def conferir_requisitos(self) -> str | None:
+        """Antes do primeiro envio real da rodada: o banco tem as migrations e RPCs exigidas?"""
+        if self._requisitos_conferidos:
+            return self._bloqueio_real
+        self._requisitos_conferidos = True
+        if not any(getattr(c, "modo", "") == "real" for c in self.canais.values()):
+            return None
+        faltas = faltando_para_publicar(self.repo)
+        if faltas:
+            self._bloqueio_real = "banco sem os requisitos de publicação (" + "; ".join(faltas[:5]) + ")"
+            self.log.critico("publicacao", "Publicações REAIS bloqueadas: o banco não tem as migrations/RPCs exigidas. "
+                             "Aplique as migrations pendentes.", faltando=faltas)
+        return self._bloqueio_real
+
+    def _reservar_envio(self, item, canal, codigo) -> bool:
+        """Reserva exclusiva gravada no banco ANTES do envio. Sem reserva, sem envio (nunca permissivo)."""
         try:
-            self.repo.marcar_publicando(item.id)
+            reservado = self.repo.reservar_envio(item.id)
         except ErroBanco as e:
-            if e.status == 404 or (e.codigo or "").startswith("PGRST"):
-                self.log.aviso("publicacao", "Proteção contra post duplicado indisponível: aplique a migration 015",
-                               erro=str(e))
-            else:
-                raise
+            self.log.critico("publicacao", f"{codigo}: não consegui gravar a reserva do envio; NADA foi enviado. "
+                             "Publicação interrompida até o banco responder.", erro=str(e), fila_id=item.id)
+            raise
+        if not reservado:
+            self.log.erro("publicacao", f"{codigo}: o item não está mais reservado para este envio (trava vencida, "
+                          "já enviado ou cancelado). NADA foi enviado.", fila_id=item.id, promocao_id=item.promocao_id)
+            return False
+        return True
+
+    def _atribuicao_pendente(self, dados: dict, cfg: dict) -> str | None:
+        """Em produção (links.exigir_atribuicao), o link precisa ter a atribuição comprovada recentemente."""
+        if not cfg.get("links.exigir_atribuicao"):
+            return None
+        link_id = (dados or {}).get("link_id")
+        if not link_id:
+            return "oferta sem link de afiliado"
+        quando = self.repo.link_atribuicao(link_id)
+        horas = float(cfg.get("links.validade_atribuicao_horas") or 72)
+        if quando is None:
+            return "atribuição de afiliado não comprovada: aguardando o link ser conferido até a loja"
+        if self.relogio() - quando > timedelta(hours=horas):
+            return f"atribuição de afiliado conferida há mais de {horas:.0f} h: aguardando nova conferência"
+        return None
 
     def _devolver(self, item, minutos, motivo) -> None:
         try:
@@ -274,8 +497,9 @@ class ServicoPublicacao:
             return None
         if url not in cache:
             try:
-                cache[url] = self.http.get(url).content
-            except ErroIntegracao:
+                cache[url] = baixar_imagem(self.http, url)   # https, IP público, ≤ 5 MB, JPEG/PNG/WEBP, ≤ 15 s
+            except ImagemRecusada as e:
+                self.log.aviso("publicacao", "Imagem do produto recusada; uso a arte padrão", motivo=str(e))
                 cache[url] = None
         return cache[url]
 
@@ -288,12 +512,28 @@ class ServicoPublicacao:
             achado = None  # sem a tabela de cupons (migration 016 ausente): publica sem cupom
         if achado and (not achado[0].demo or dados.get("demo")):
             dados["cupom_codigo"], dados["preco_com_cupom"] = achado[0].codigo, achado[1]
-        foto = arte.abrir_foto(self._foto(dados.get("imagem_url"), cache))
+        aplicar_desconto_da_analise(dados)
+        # Amazon: a imagem do produto não é baixada nem re-hospedada na arte (regras de uso de conteúdo do
+        # Programa de Associados); a arte sai com o fundo padrão.
+        url_foto = None if (dados.get("marketplace") or "").lower() == "amazon" else dados.get("imagem_url")
+        foto = arte.abrir_foto(self._foto(url_foto, cache))
         link = f"{self.url_cliques}?l={item.link_afiliado_id}&c={canal.codigo}"
+        exp = self._experimento_ativo()
+        variante_legenda = variante_arte = "A"
+        if exp:
+            variante = atribuir_variante(exp["id"], item.promocao_id, canal.codigo)
+            self._extras[item.id] = {"experimento_id": exp["id"], "variante": variante}
+            if exp.get("tipo") == "legenda":
+                variante_legenda = variante
+            elif exp.get("tipo") == "arte":
+                variante_arte = variante
+            # "horario": a variante já decidiu o agendamento na fila; aqui só é registrada
+        if variante_arte == "B":
+            cfg = dict(cfg, **{"visual.cor_principal": cfg.get("experimentos.arte_b_cor") or "#1F2937"})
         if canal.codigo.startswith("instagram"):
-            legenda = textos.legenda_instagram(dados, cfg, destaque)
+            legenda = textos.legenda_instagram(dados, cfg, destaque, variante_legenda)
         else:
-            legenda = textos.legenda_telegram(dados, link, cfg)
+            legenda = textos.legenda_telegram(dados, link, cfg, variante_legenda)
         return ConteudoPublicacao(
             promocao_id=item.promocao_id, titulo=dados["titulo"], preco=float(dados["preco_promocional"]),
             preco_original=float(dados["preco_referencia"]) if dados.get("preco_referencia") else None,
@@ -316,3 +556,22 @@ class ServicoPublicacao:
             except ErroIntegracao as e:
                 self.log.aviso("publicacao", "Não consegui marcar a oferta como encerrada", erro=str(e))
         return n
+
+
+def aplicar_desconto_da_analise(dados: dict) -> None:
+    """O post usa o desconto que a ANÁLISE comprovou, nunca o "preço de" bruto da loja.
+    Ex.: loja diz "de R$ 300", mas o maior preço visto foi R$ 82 → o post mostra o desconto sobre R$ 82
+    (ou nenhum, se não houver comprovação)."""
+    analise = dados.get("analise")
+    if analise is None:
+        return  # sem análise (só acontece em testes antigos/simulação): mantém os dados como estão
+    comprovado = bool(analise.get("desconto_comprovado"))
+    real = analise.get("desconto_real")
+    base = str(analise.get("base_desconto") or "")
+    if "cupom" in base:  # desconto vindo do cupom: a linha do cupom já mostra o preço final
+        comprovado = False
+    dados["desconto_comprovado"] = comprovado
+    preco = float(dados.get("preco_promocional") or 0)
+    if comprovado and real and 0 < float(real) < 100 and preco > 0:
+        dados["desconto_pct"] = round(float(real), 0)
+        dados["preco_referencia"] = round(preco / (1 - float(real) / 100), 2)

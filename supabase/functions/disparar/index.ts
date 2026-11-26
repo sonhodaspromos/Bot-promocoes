@@ -9,6 +9,7 @@
 //   GH_REF    = branch (opcional, padrão "main")
 // Implantada com verify_jwt = false porque faz a própria autenticação (e precisa responder ao CORS).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { podeDisparar, type Sessao } from "../_compartilhado/regras.ts";
 
 const URL_BASE = Deno.env.get("SUPABASE_URL")!;
 const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -42,14 +43,16 @@ Deno.serve(async (req: Request) => {
     if (!u.ok) return resposta(401, { erro: "Sessão inválida ou expirada. Entre de novo." });
     const usuario = await u.json();
 
-    // 2. tem permissão? (consulta feita COM o token da pessoa, então o RLS vale)
-    const p = await fetch(`${URL_BASE}/rest/v1/rpc/meu_papel`, {
+    // 2. tem permissão E o 2º fator? (consulta feita COM o token da pessoa: o aal vem do próprio token)
+    const p = await fetch(`${URL_BASE}/rest/v1/rpc/minha_sessao`, {
       method: "POST",
       headers: { apikey: ANON, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: "{}",
     });
-    const papel = p.ok ? await p.json() : null;
-    if (papel !== "dono" && papel !== "editor") return resposta(403, { erro: "Apenas dono ou editor podem publicar agora." });
+    const [sessao] = p.ok ? (await p.json()) as Sessao[] : [null];
+    const permissao = podeDisparar(sessao ?? null);
+    if (!permissao.ok) return resposta(403, { erro: permissao.motivo });
+    const papel = sessao!.papel;
 
     // 3. GitHub configurado?
     const ghToken = Deno.env.get("GH_TOKEN");

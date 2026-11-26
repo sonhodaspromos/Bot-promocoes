@@ -21,6 +21,16 @@ class OfertaEncontrada:
     categoria_slug: str | None = None
     disponivel: bool = True
     demo: bool = False
+    preco_maximo: float | None = None       # maior preço entre as variações (cor, tamanho...), se a loja informar
+    referencia_derivada: bool = False       # "preço de" calculado a partir de uma taxa de desconto (não é um preço visto)
+    # dados opcionais: None = a loja não informou (nunca preenchidos com suposição)
+    gtin: str | None = None
+    marca: str | None = None
+    modelo: str | None = None
+    vendedor_id: str | None = None
+    vendedor_nome: str | None = None
+    loja_oficial: bool | None = None
+    estoque: int | None = None
 
     @property
     def desconto_pct(self) -> float:
@@ -34,6 +44,7 @@ class ResultadoValidacao:
     valido: bool
     motivo: str | None = None
     status_http: int | None = None
+    atribuicao: bool = False   # True só quando o parâmetro + o SEU ID de afiliado chegaram ao destino final na loja
 
 
 @dataclass
@@ -64,6 +75,7 @@ class ItemFila:
 
 @dataclass
 class ResumoExecucao:
+    modulos: dict = field(default_factory=dict)   # vitrine, alertas, WhatsApp (quando ligados)
     encontradas: int = 0
     novas_promocoes: int = 0
     links_validados: int = 0

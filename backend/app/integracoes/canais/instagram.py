@@ -69,7 +69,11 @@ class InstagramCanal(CanalPublicacao):
 
     def testar(self):
         eu = self._req("GET", "me", fields="username,account_type")
-        return f"{self.codigo}: REAL ✔ conta @{eu.get('username')} ({eu.get('account_type')})"
+        cota = self.cota_restante()
+        if (eu.get("account_type") or "").upper() not in ("BUSINESS", "MEDIA_CREATOR", "CREATOR"):
+            raise ErroIntegracao(f"conta @{eu.get('username')} não é profissional (Business/Creator)", servico="instagram")
+        return (f"{self.codigo}: REAL ✔ conta @{eu.get('username')} ({eu.get('account_type')}), "
+                f"cota de publicação restante: {cota if cota is not None else 'não informada'}")
 
 
 LIMITE = {4, 9, 17, 32, 613}          # códigos de excesso de chamadas / cota de publicação

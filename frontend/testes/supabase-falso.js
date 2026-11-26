@@ -3,10 +3,17 @@
 const params = new URLSearchParams(location.search);
 const PAPEL = params.get("papel") || "dono";
 const LOGADO = params.get("logado") !== "0";
+const AAL = params.get("aal") || "aal2";          // aal1 = entrou só com senha (falta o 2º fator)
+const FATOR = params.get("fator") || "verificado"; // verificado | nenhum
+let aalAtual = AAL;
 const agora = new Date().toISOString();
 const hoje = new Date().toLocaleDateString("sv-SE");
 
 window.__chamadas = [];
+function cfg(chave, valor) {
+  const c = DADOS.configuracoes.find((x) => x.chave === chave);
+  if (c) c.valor = valor; else DADOS.configuracoes.push({ chave, valor, tipo: "texto", descricao: chave });
+}
 
 const DADOS = {
   configuracoes: [
@@ -15,12 +22,17 @@ const DADOS = {
     { chave: "filtros.desconto_minimo", valor: 20, tipo: "numero", descricao: "Desconto mínimo (%)", minimo: 0, maximo: 95 },
     { chave: "monitor.ativo", valor: true, tipo: "booleano", descricao: "Pausar ofertas quando o preço sobe ou o produto esgota" },
     { chave: "transparencia.aviso_afiliado", valor: "Link de afiliado: posso ganhar comissão.", tipo: "texto", descricao: "Aviso de comissão" },
+    { chave: "sistema.parada_emergencia", valor: false, tipo: "booleano", descricao: "Parada de emergência (use o botão no topo)" },
+    { chave: "auth.exigir_mfa", valor: true, tipo: "booleano", descricao: "Exigir 2º fator" },
     { chave: "visual.nome_perfil", valor: "Sonho das Promos", tipo: "texto", descricao: "Nome no topo das artes" },
     { chave: "visual.cor_principal", valor: "#EE4D2D", tipo: "texto", descricao: "Cor principal" },
   ],
   categorias: [
     { id: 1, nome: "Eletrônicos", slug: "eletronicos", palavras_chave: ["fone bluetooth", "smartwatch"], ativa: true, ordem: 1 },
     { id: 2, nome: "Casa", slug: "casa", palavras_chave: ["air fryer"], ativa: false, ordem: 2 },
+  ],
+  convites: [
+    { email: "editora@teste.com", papel: "editor", expira_em: agora, usado_em: null, criado_em: agora },
   ],
   marketplaces: [
     { id: 1, codigo: "shopee", nome: "Shopee", modo: "demo", ativo: true, dominios_afiliado: ["s.shopee.com.br", "shope.ee"] },
@@ -54,6 +66,30 @@ const DADOS = {
     { id: 2, data_venda: hoje, valor_comissao: 2, status: "pendente", origem: "api", descricao: "Fone", marketplaces: { nome: "Shopee" } },
   ],
   credenciais_integracoes: [{ integracao: "telegram", nome: "TOKEN", dica: "••••a1b2", atualizado_em: agora }],
+  vw_desempenho_publicacoes: params.get("sem_desempenho") === "1" ? [] : [
+    { publicacao_id: 1, promocao_id: 12, publicado_em: agora, canal: "telegram", periodo: "noite (18h–24h)", categoria: "Casa", faixa_preco: "R$ 250–500", cliques: 9, cliques_2h: 5, comissao_atribuida: 7.5, conversoes_atribuidas: 1 },
+    { publicacao_id: 2, promocao_id: 12, publicado_em: agora, canal: "instagram_story", periodo: "noite (18h–24h)", categoria: "Casa <b>x</b>", faixa_preco: "R$ 250–500", cliques: 3, cliques_2h: 1, comissao_atribuida: 0, conversoes_atribuidas: 0 },
+  ],
+  inteligencia_resumos: [
+    { tipo: "aprendizado", calculado_em: agora, dados: { publicacoes: 2, cliques: 12, conversoes: 1, amostra_minima: 20, sem_dados: ["Só 2 publicação(ões) real(is); o aprendizado começa com 20"] } },
+    { tipo: "saturacao", calculado_em: agora, dados: { canais: { telegram: { saturado: false, explicacao: "telegram: dados insuficientes para medir saturação" } }, categorias_cheias: {} } },
+  ],
+  experimentos: [],
+  vw_financeiro_mensal: [
+    { mes: hoje.slice(0, 8) + "01", receita_estimada_brl: 40, receita_confirmada_brl: 120, receita_recebida_brl: 50,
+      receita_cancelada_brl: 5, custos_faturados_usd: 10, custos_estimados_usd: 30, whatsapp_consumido_usd: 2 },
+  ],
+  custos_servicos: [{ id: 1, mes: hoje.slice(0, 8) + "01", servico: "supabase", valor_usd: 10, origem: "fatura", observacao: "plano" }],
+  orcamento_consumo: [{ servico: "whatsapp", dia: hoje, gasto_usd: 4.5, teto_usd: 5 }],
+  vw_conciliacao_comissoes: [
+    { marketplace: "shopee", competencia: "2026-09-01", valor_pendente: 0, valor_confirmado: 25.5, valor_cancelado: 4, valor_pago: 0, pendentes_antigas: 0, confirmadas_sem_repasse: 2, repasse: null },
+  ],
+  selecoes_ofertas: [
+    { promocao_id: 12, decidido_em: agora, selecionada: true, posicao: 1, prioridade: 71, receita_esperada: null,
+      detalhes: { resumo: "1º lugar · Prioridade 71/100 (excelente)", fatores: [{ nome: "qualidade", nota: 0.88, explicacao: "nota 88/100 no motor de inteligência" }], avisos: [], sem_dados: ["estoque: a loja não informa a quantidade (só se está disponível)", "receita esperada: vendas atribuídas insuficientes para estimar a conversão"] } },
+    { promocao_id: 11, decidido_em: agora, selecionada: false, posicao: null, prioridade: 40, receita_esperada: null,
+      detalhes: { resumo: "Recusada: mesmo produto (mesmo GTIN, confiança alta) mais barato em mercado_livre", fatores: [], avisos: [], sem_dados: [] } },
+  ],
   promocoes: [],
   vw_cupons_painel: [
     { id: 41, marketplace_id: 1, marketplace_codigo: "shopee", marketplace_nome: "Shopee", tipo: "cupom", origem: "manual", titulo: "Cupom de fim de semana",
@@ -82,10 +118,13 @@ function construtor(tabela) {
     single() { estado.unico = true; return api; },
     then(ok, falha) {
       window.__chamadas.push({ tabela, operacao: estado.operacao, corpo: estado.corpo, filtros: estado.filtros });
+      if (tabela === "marketplaces" && estado.operacao === "update" && PAPEL !== "dono")
+        return Promise.resolve({ data: null, error: { code: "P0027", message: "Só o dono altera domínios e identificadores de afiliado (protege as suas comissões)." } }).then(ok, falha);
       if (PAPEL === "leitor" && estado.operacao !== "select") return Promise.resolve({ data: null, error: { code: "42501", message: "denied" } }).then(ok, falha);
       let dados = DADOS[tabela] || [];
       for (const [op, campo, valor] of estado.filtros) {
         if (op === "eq") dados = dados.filter((d) => d[campo] === undefined || String(d[campo]) === String(valor));
+        if (op === "in") dados = dados.filter((d) => d[campo] === undefined || valor.includes(d[campo]));
       }
       const resposta = estado.contar ? { data: null, count: CONTAGENS[tabela] ?? dados.length, error: null }
         : { data: estado.unico ? (dados[0] || null) : dados, error: null };
@@ -106,11 +145,33 @@ export function createClient() {
       signInWithPassword: async () => ({ error: { message: "Invalid login credentials" } }),
       signUp: async () => ({ data: { session: null }, error: null }),
       signOut: async () => ({}),
+      refreshSession: async () => ({ data: {}, error: null }),
+      mfa: {
+        listFactors: async () => ({ data: { totp: FATOR === "verificado" ? [{ id: "f1", status: "verified" }] : [] } }),
+        unenroll: async () => ({ error: null }),
+        enroll: async () => { window.__chamadas.push({ mfa: "enroll" }); return { data: { id: "f2", totp: { qr_code: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E", secret: "JBSWY3DPEHPK3PXP" } }, error: null }; },
+        challengeAndVerify: async ({ code }) => {
+          window.__chamadas.push({ mfa: "verify", code });
+          if (code !== "123456") return { error: { message: "Invalid TOTP code" } };
+          aalAtual = "aal2"; return { error: null };
+        },
+      },
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
     },
     rpc: async (nome, args) => {
       window.__chamadas.push({ rpc: nome, args });
       if (nome === "meu_papel") return { data: PAPEL === "nenhum" ? null : PAPEL, error: null };
+      if (nome === "minha_sessao") return { data: [{ papel: PAPEL === "nenhum" || aalAtual !== "aal2" ? null : PAPEL, aal: aalAtual, mfa_exigido: true }], error: null };
+      if (nome === "registrar_repasse") {
+        if (PAPEL !== "dono") return { data: null, error: { code: "42501", message: "Só o dono registra repasses." } };
+        const ok = Math.abs(args.p_valor - 25.5) <= 1;
+        return { data: { status: ok ? "conciliado" : "divergente", itens: 2, valor_esperado: 25.5, diferenca: args.p_valor - 25.5 }, error: null };
+      }
+      if (nome === "ativar_parada_emergencia") { cfg("sistema.parada_emergencia", true); cfg("sistema.parada_motivo", args.p_motivo); return { data: null, error: null }; }
+      if (nome === "desativar_parada_emergencia") {
+        if (PAPEL !== "dono") return { data: null, error: { code: "42501", message: "só o dono" } };
+        cfg("sistema.parada_emergencia", false); return { data: null, error: null };
+      }
       if (nome === "cadastrar_oferta_manual" && !/mercadolivre\.com\//.test(args.p_link))
         return { data: null, error: { code: "P0011", message: "Esse link não é um link de afiliado de Mercado Livre (domínios aceitos: mercadolivre.com)." } };
       return { data: 99, error: null };

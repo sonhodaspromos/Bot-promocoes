@@ -80,8 +80,8 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .cat { border: 1px solid var(--ln); border-radius: 12px; padding: 10px; margin-bottom: 10px; background: #fff; }
 
 /* navegação inferior */
-.nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--ln); display: flex; justify-content: space-around; padding: 6px 2px calc(6px + env(safe-area-inset-bottom)); z-index: 5; }
-.nav button { background: none; border: 0; font-size: 11px; color: var(--mu); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 6px; cursor: pointer; }
+.nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--ln); display: flex; justify-content: space-between; overflow-x: auto; scrollbar-width: none; padding: 6px 2px calc(6px + env(safe-area-inset-bottom)); z-index: 5; }
+.nav button { flex: 1 0 auto; background: none; border: 0; font-size: 11px; color: var(--mu); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 6px; cursor: pointer; }
 .nav button span { font-size: 19px; }
 .nav button.on { color: var(--p); font-weight: 700; }
 

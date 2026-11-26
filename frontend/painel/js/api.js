@@ -20,6 +20,8 @@ const MENSAGENS = {
   P0023: "Esse dado é calculado pelo sistema e não pode ser alterado pelo painel.",
   P0025: "Esse cupom está vencido ou pausado.",
   P0026: "O cupom é de outra loja: só vale para produtos da mesma loja.",
+  P0027: "Só o dono pode alterar isso (protege as suas comissões e a transparência).",
+  P0028: "Cadastro fechado: peça ao dono um convite para este e-mail.",
   PGRST301: "Sua sessão expirou. Entre de novo.",
 };
 
@@ -27,7 +29,7 @@ export function mensagemErro(erro) {
   if (!erro) return "";
   const codigo = erro.code || "";
   // códigos próprios com mensagem já explicativa vinda do banco
-  if (["P0011", "P0020", "P0021", "P0022", "P0024", "P0001"].includes(codigo)) return erro.message;
+  if (["P0011", "P0020", "P0021", "P0022", "P0024", "P0001", "P0027"].includes(codigo)) return erro.message;
   return MENSAGENS[codigo] || erro.message || "Algo deu errado.";
 }
 

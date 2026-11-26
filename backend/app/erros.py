@@ -78,3 +78,8 @@ class RegraViolada(ErroBanco):
     @property
     def descricao(self) -> str:
         return CODIGOS_REGRA.get(self.codigo or "", "regra do banco")
+
+
+class EscritaBloqueada(ErroBot):
+    """Modo de validação somente leitura: uma chamada que publicaria, enviaria ou alteraria algo
+    num serviço externo foi barrada antes de sair do bot."""

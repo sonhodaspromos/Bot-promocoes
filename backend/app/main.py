@@ -9,17 +9,20 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from . import VERSAO
 from .cliente_http import ClienteHTTP
+from .ambiente import conferir_banco, ler_ambiente
 from .config import carregar_env, ler_config
 from .erros import ErroBot, ErroConfiguracao
 from .integracoes import registro
 from .integracoes.fontes.demo import DemoFonte
 from .integracoes.canais.demo import DemoCanal
-from .logs import Log
+from .logs import Log, mascarar
+from .monitor_externo import Batimento
 from .orquestrador import Orquestrador
 from .repositorio import SupabaseRepositorio
 from .repositorio_memoria import MemoriaRepositorio
@@ -30,22 +33,36 @@ SAIDA = Path(__file__).resolve().parents[1] / "saida"
 
 def _montar_real(log: Log):
     carregar_env()
+    amb = ler_ambiente(os.environ)  # sem AMBIENTE definido o bot não roda
     base = ler_config()  # valida SUPABASE_URL e a chave antes de qualquer coisa
     repo = SupabaseRepositorio(base.supabase_url, base.supabase_chave, ClienteHTTP("supabase", timeout=base.timeout_http))
     config = ler_config(buscar_no_cofre=repo.obter_credencial)
     log.adicionar_segredos(config.segredos)
     cfg = repo.configuracoes()
-    integ = registro.montar(config, ordenacao_shopee=int(cfg.get("busca.ordenacao_shopee") or 2))
-    return config, repo, integ
+    conferir_banco(amb, cfg)  # banco de outro ambiente: bloqueado
+    integ = registro.montar(config, ordenacao_shopee=int(cfg.get("busca.ordenacao_shopee") or 2), ambiente=amb)
+    log.info("bot", f"Ambiente: {amb.nome.upper()}", integracoes_ativas=amb.ativas)
+    return config, repo, integ, amb
 
 
 def cmd_rodar(args, log: Log) -> int:
-    config, repo, integ = _montar_real(log)
-    log.info("bot", f"Bot de Ofertas v{VERSAO}", **config.resumo_seguro())
-    status, resumo = Orquestrador(repo, integ, log, url_supabase=config.supabase_url).executar(
-        origem=args.origem, forcar_comissoes=args.comissoes)
+    batimento = Batimento(os.environ.get("HEALTHCHECK_URL"))
+    batimento.inicio()
+    try:
+        config, repo, integ, amb = _montar_real(log)
+        log.info("bot", f"Bot de Ofertas v{VERSAO}", **config.resumo_seguro())
+        status, resumo = Orquestrador(repo, integ, log, url_supabase=config.supabase_url, ambiente=amb).executar(
+            origem=args.origem, forcar_comissoes=args.comissoes)
+    except Exception as e:
+        batimento.falha(mascarar(f"{type(e).__name__}: {e}", log.segredos))
+        raise
+    texto = f"status={status} alertas_criticos={resumo.alertas_criticos}"
     # saída 1 = o GitHub marca a execução como falha e manda e-mail para o dono do repositório
-    return 1 if status == "erro" or resumo.alertas_criticos else 0
+    if status == "erro" or resumo.alertas_criticos:
+        batimento.falha(texto)
+        return 1
+    batimento.sucesso(texto)
+    return 0
 
 
 def cmd_simular(args, log: Log) -> int:
@@ -65,7 +82,7 @@ def cmd_simular(args, log: Log) -> int:
 
 
 def cmd_testar(args, log: Log) -> int:
-    config, repo, integ = _montar_real(log)
+    config, repo, integ, _ = _montar_real(log)
     print(f"Banco: {config.supabase_url} ✔ ({len(repo.marketplaces())} marketplaces, {len(repo.canais())} canais)")
     falhou = False
     for item in list(integ.fontes.values()) + list(integ.canais.values()):
@@ -77,12 +94,79 @@ def cmd_testar(args, log: Log) -> int:
     return 1 if falhou else 0
 
 
-def cmd_comissoes(args, log: Log) -> int:
-    config, repo, integ = _montar_real(log)
-    from .servicos.comissoes import ServicoComissoes
-    n = ServicoComissoes(repo, integ.fontes, log).executar(repo.configuracoes(), forcar=True, dias=args.dias)
-    print(f"{n} itens de comissão processados")
+def cmd_modulo(args, log: Log) -> int:
+    """vitrine | alertas | whatsapp: executa um módulo agora (respeita as flags recursos.*)."""
+    from .modulos import Modulos
+    config, repo, integ, amb = _montar_real(log)
+    cfg = repo.configuracoes()
+    m = Modulos(repo, integ, log, config.supabase_url, amb)
+    r = {"vitrine": m.vitrine, "alertas": m.alertas, "whatsapp": m.whatsapp}[args.comando](cfg)
+    print(r)
     return 0
+
+
+def cmd_worker(args, log: Log) -> int:
+    """Worker independente da fila de tarefas (vários podem rodar em paralelo)."""
+    from .modulos import Modulos
+    from .worker import Worker
+    config, repo, integ, amb = _montar_real(log)
+    handlers = Modulos(repo, integ, log, config.supabase_url, amb).handlers()
+    tipos = [t for t in (args.tipos.split(",") if args.tipos else handlers) if t in handlers]
+    r = Worker(repo, {t: handlers[t] for t in tipos}, log).rodar(max_tarefas=args.max)
+    print(r)
+    alerta = alerta_fila(repo, log)
+    try:
+        repo.gravar_logs(None, log.retirar_pendentes())
+    except Exception:
+        pass
+    # código 1 = o GitHub Actions marca a execução como falha e avisa o dono por e-mail
+    return 1 if r["falhas"] or alerta else 0
+
+
+def alerta_fila(repo, log: Log) -> bool:
+    """Fila acumulada, tarefa abandonada ou falha definitiva viram ERRO no log (painel) e código de saída 1."""
+    try:
+        s = repo.fila_saude()
+    except Exception as e:  # noqa: BLE001
+        log.aviso("worker", f"Saúde da fila indisponível: {e}")
+        return False
+    if s.get("alerta"):
+        log.erro("worker", f"ALERTA da fila: {s.get('motivo')}")
+        return True
+    return False
+
+
+def cmd_comissoes(args, log: Log) -> int:
+    config, repo, integ, _ = _montar_real(log)
+    from .servicos.comissoes import ServicoComissoes
+    servico = ServicoComissoes(repo, integ.fontes, log)
+    n = servico.executar(repo.configuracoes(), forcar=True, dias=args.dias)
+    print(f"{n} itens de comissão processados")
+    if args.reconciliar:
+        r = servico.reconciliar(repo.configuracoes(), forcar=True)
+        print(f"Reconciliação de 90 dias: {r['divergencias']} divergência(s)")
+        return 1 if r["divergencias"] else 0
+    return 0
+
+
+def cmd_validar(args, log: Log) -> int:
+    """Validação REAL somente leitura. Não usa registro.montar (que em homologação troca os canais por
+    simulados e por isso reprovava tudo): monta clientes reais com HTTP que barra qualquer escrita."""
+    from .cliente_http import ClienteHTTPSomenteLeitura
+    from .validacao_integracoes import validar
+    carregar_env()
+    amb = ler_ambiente(os.environ)
+    base = ler_config()
+    repo = SupabaseRepositorio(base.supabase_url, base.supabase_chave, ClienteHTTP("supabase", timeout=base.timeout_http))
+    config = ler_config(buscar_no_cofre=repo.obter_credencial)
+    log.adicionar_segredos(config.segredos)
+    cfg = repo.configuracoes()
+    conferir_banco(amb, cfg)
+    alvos = registro.montar_validacao(config, amb, int(cfg.get("busca.ordenacao_shopee") or 2),
+                                      permitir_envio_imgbb=args.imgbb)
+    print(f"Validando integrações REAIS · ambiente {amb.nome.upper()} · modo SOMENTE LEITURA (nada é publicado)")
+    return validar(alvos, repo, log, link_manual=args.link, http=ClienteHTTPSomenteLeitura("validacao"),
+                   saida=SAIDA / "validacao_integracoes.json", ambiente=amb.nome)
 
 
 def cmd_arte(args, log: Log) -> int:
@@ -108,14 +192,24 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("testar-integracoes")
     c = sub.add_parser("comissoes")
     c.add_argument("--dias", type=int, default=7)
+    c.add_argument("--reconciliar", action="store_true", help="relê 90 dias e compara com o banco")
+    v = sub.add_parser("validar-integracoes", help="valida as integrações reais (somente leitura) e grava evidência")
+    v.add_argument("--imgbb", action="store_true", help="envia 1 imagem de teste de 1 pixel ao ImgBB (expira em 60 s)")
+    v.add_argument("--link", help="link de afiliado para conferir a atribuição")
     sub.add_parser("arte-exemplo")
+    for nome in ("vitrine", "alertas", "whatsapp"):
+        sub.add_parser(nome, help=f"executa o módulo {nome} agora (feature flag recursos.* precisa estar ligada)")
+    w = sub.add_parser("worker", help="consome a fila persistente de tarefas")
+    w.add_argument("--tipos", help="ex.: vitrine.gerar,alertas.processar (padrão: todos)")
+    w.add_argument("--max", type=int, default=50)
     args = p.parse_args(argv)
     if not args.comando:
         args = p.parse_args(["rodar"])
 
     log = Log()
     comandos = {"rodar": cmd_rodar, "simular": cmd_simular, "testar-integracoes": cmd_testar,
-                "comissoes": cmd_comissoes, "arte-exemplo": cmd_arte}
+                "comissoes": cmd_comissoes, "arte-exemplo": cmd_arte, "validar-integracoes": cmd_validar,
+                "vitrine": cmd_modulo, "alertas": cmd_modulo, "whatsapp": cmd_modulo, "worker": cmd_worker}
     try:
         return comandos[args.comando](args, log)
     except ErroConfiguracao as e:

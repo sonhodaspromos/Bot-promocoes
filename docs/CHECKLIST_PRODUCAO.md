@@ -2,6 +2,23 @@
 
 Marque cada item. **Só ligue as publicações reais quando todos os itens 🔴 estiverem feitos.** Passo a passo de cada item em [IMPLANTACAO.md](IMPLANTACAO.md).
 
+## 🔴 Auditoria complementar (25/11/2026): ver [AUDITORIA_COMPLEMENTAR.md](AUDITORIA_COMPLEMENTAR.md) e [PENDENCIAS.md](PENDENCIAS.md)
+
+- [ ] Projeto Supabase de produção **reativado** (estava pausado). Plano Pro avaliado (sem pausa automática).
+- [ ] Backup feito **antes** de aplicar a migration `20261125120000_auditoria_complementar.sql`
+- [ ] Migration 017 aplicada e `testes.resumo()` → **132 / 132 / 0**
+- [ ] `select public.definir_email_dono('seu@email');` executado; conta do dono criada **com 2º fator (TOTP)**
+- [ ] Supabase Auth: MFA TOTP **ligado**; cadastro público **desligado**; convite de teste funcionando
+- [ ] Variáveis do GitHub: `AMBIENTE=producao` e `INTEGRACOES_ATIVAS` definidos; o bot **bloqueia** (não cai para demo) se faltar credencial
+- [ ] `python -m app.main validar-integracoes --imgbb` → **APROVADO** (evidência JSON guardada)
+- [ ] `marketplaces.parametros_afiliado` e `id_afiliado` preenchidos e conferidos com um link real (atribuição chega ao destino)
+- [ ] Segredo `CLIQUE_SAL` (32+ caracteres) na função `r`; funções `r` e `disparar` atualizadas
+- [ ] `HEALTHCHECK_URL` cadastrado e alerta externo testado (desligue o bot 30 min e confira se o alerta chega)
+- [ ] Proteção da `main` com checks obrigatórios: backend, banco, painel, edge-functions
+- [ ] Botão **⛔ Parar tudo** testado no painel (para, e só o dono retoma)
+- [ ] Aviso de privacidade publicado (LGPD) e termos brasileiros da Shopee lidos
+- [ ] #publi visível na 1ª linha das legendas (CONAR, maio/2026)
+
 ## 🔴 Bloqueantes (sem isso, não ligar)
 
 - [x] Migration `20261122140850_manutencao_diaria.sql` aplicada (`select public.manutencao_diaria();` responde)
@@ -19,7 +36,7 @@ Marque cada item. **Só ligue as publicações reais quando todos os itens 🔴 
 
 ## 🟠 Segurança
 
-- [ ] Cadastro de novos usuários **desligado** no Supabase (Authentication → Allow new users to sign up)
+- [ ] Cadastro de novos usuários **desligado** no Supabase (Authentication → Allow new users to sign up). Desde a migration 017 o banco também só aceita convidados.
 - [ ] Site URL do Supabase = endereço do painel
 - [ ] Tokens do GitHub (`GH_PAT`, `GH_TOKEN`) são **fine-grained**, só deste repositório, com a permissão mínima
 - [ ] Nenhum arquivo `.env` foi enviado ao GitHub (o `.gitignore` já bloqueia; confira a lista de arquivos)

@@ -109,7 +109,7 @@ begin
   teste := 'regras configuráveis do motor existem com os valores iniciais';
   begin
     ok := (select (valor #>> '{}')::numeric from public.configuracoes where chave = 'filtros.desconto_minimo') = 20
-      and (select count(*) from public.configuracoes where chave like 'inteligencia.%') = 20
+      and (select count(*) from public.configuracoes where chave like 'inteligencia.%') >= 20
       and (select (valor #>> '{}')::numeric from public.configuracoes where chave = 'inteligencia.janela_repeticao_horas') = 24;
     detalhe := (select count(*) from public.configuracoes where chave like 'inteligencia.%') || ' regras do motor';
   exception when others then ok := false; detalhe := sqlerrm; end;

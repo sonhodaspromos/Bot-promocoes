@@ -1,17 +1,22 @@
 name: Testes
 
+# Verificações obrigatórias antes de qualquer merge na main (configure em Settings > Branches >
+# Branch protection rules > "Require status checks to pass": backend, banco, painel, edge-functions).
+# Nada aqui usa credenciais reais nem acessa o banco de produção.
 on:
   push:
-    paths: ["backend/**", ".github/workflows/testes.yml"]
   pull_request:
-    paths: ["backend/**"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: testes-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  pytest:
+  backend:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -29,3 +34,71 @@ jobs:
         run: python -m pytest -q
       - name: Simulação completa em modo demonstração
         run: python -m app.main simular
+
+  banco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17          # mesma versão do Supabase de produção
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cliente PostgreSQL 17
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
+          sudo apt-get install -y -qq postgresql-client-17 >/dev/null
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+      - name: Migrations + testes do banco (RLS, SECURITY DEFINER, permissões, regras)
+        run: supabase/homologacao/rodar.sh homologacao
+      - name: Concorrência da fila, interrupções, parada de emergência, backup e restauração
+        run: supabase/homologacao/concorrencia_e_backup.sh homologacao
+      - name: Concorrência da expansão (workers, orçamento, WhatsApp, webhook)
+        run: supabase/homologacao/concorrencia_expansao.sh homologacao
+      - name: Migrations 020/021 - aplicar, reverter e reaplicar
+        run: supabase/homologacao/migracoes_ida_volta.sh
+
+  painel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "playwright>=1.47,<2" && python -m playwright install --with-deps chromium
+      - name: Painel com dados simulados (login, 2º fator, papéis, convites, botão de emergência)
+        run: python frontend/testes/testar_painel.py
+      - name: Vitrine pública (responsividade, acessibilidade, XSS, SEO)
+        run: python frontend/testes/testar_vitrine.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capturas-painel
+          path: frontend/testes/capturas
+          retention-days: 7
+
+  edge-functions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Regras das Edge Functions (IP confiável, robôs, sal, redirecionamento, 2º fator)
+        run: node --experimental-strip-types --test supabase/functions/testes/*.test.ts
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Tipagem das funções
+        run: deno check supabase/functions/r/index.ts supabase/functions/disparar/index.ts

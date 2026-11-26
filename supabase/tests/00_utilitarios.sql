@@ -18,14 +18,22 @@ exception when others then
 end $$;
 
 -- Cria um usuário de teste no Auth
+-- Cria um usuário direto no banco (sem convite). Ajuda de TESTE: como antes, o primeiro usuário vira dono,
+-- para os testes antigos continuarem simples. Em produção, o dono só nasce pelo e-mail de definir_email_dono()
+-- e os demais só por convite (ver 11_auditoria_complementar.sql, que testa os gatilhos reais sem este atalho).
 create or replace function testes.novo_usuario(p_email text)
 returns uuid language plpgsql as $$
 declare v uuid := gen_random_uuid();
 begin
+  perform set_config('testes.cadastro_direto', 'sim', true);
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                           created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
   values (v, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', p_email, '',
           now(), now(), '{}'::jsonb, '{}'::jsonb);
+  perform set_config('testes.cadastro_direto', '', true);
+  if not exists (select 1 from public.administradores where papel = 'dono') then
+    insert into public.administradores (user_id, email, papel) values (v, p_email, 'dono');
+  end if;
   return v;
 end $$;
 
@@ -44,7 +52,16 @@ create or replace function testes.como(p_user uuid)
 returns void language plpgsql as $$
 begin
   perform set_config('request.jwt.claims',
-                     json_build_object('sub', p_user, 'role', 'authenticated')::text, true);
+                     json_build_object('sub', p_user, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  execute 'set local role authenticated';
+end $$;
+
+-- Como testes.como, mas logado SÓ com senha (sem o 2º fator)
+create or replace function testes.como_sem_mfa(p_user uuid)
+returns void language plpgsql as $$
+begin
+  perform set_config('request.jwt.claims',
+                     json_build_object('sub', p_user, 'role', 'authenticated', 'aal', 'aal1')::text, true);
   execute 'set local role authenticated';
 end $$;
 
@@ -80,7 +97,9 @@ begin
     order by p.proname
   loop
     for r in execute format('select * from testes.%I()', f.proname) loop
-      grupo := substr(f.proname, 3); teste := r.teste; ok := r.ok; detalhe := r.detalhe;
+      -- resultado NULL (condição que não deu true nem false) conta como FALHA: nunca some do placar
+      grupo := substr(f.proname, 3); teste := r.teste; ok := coalesce(r.ok, false);
+      detalhe := case when r.ok is null then '[resultado indefinido] ' else '' end || coalesce(r.detalhe, '');
       return next;
     end loop;
   end loop;

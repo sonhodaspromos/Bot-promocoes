@@ -7,13 +7,20 @@ import requests
 
 
 class RespostaFalsa:
-    def __init__(self, status=200, json=None, texto=None, url=None, headers=None):
+    def __init__(self, status=200, json=None, texto=None, url=None, headers=None, conteudo: bytes | None = None):
         self.status_code = status
         self._json = json
         self.text = texto if texto is not None else (_json.dumps(json) if json is not None else "")
         self.url = url
         self.headers = headers or {}
-        self.content = self.text.encode()
+        self.content = conteudo if conteudo is not None else self.text.encode()
+        self.lidos = 0  # quantos bytes o código leu de fato (para testar limites de download)
+
+    def iter_content(self, chunk_size=65536):
+        for i in range(0, len(self.content), chunk_size):
+            bloco = self.content[i:i + chunk_size]
+            self.lidos += len(bloco)
+            yield bloco
 
     def json(self):
         if self._json is None:

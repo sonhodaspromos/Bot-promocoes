@@ -14,14 +14,16 @@ O banco repete a checagem de domínio (trigger), então mesmo um erro aqui não 
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from ..erros import ErroIntegracao
 from ..cliente_http import ClienteHTTP
 from ..modelos import ResultadoValidacao
+from ..rede import UrlRecusada, host_permitido, seguir
 
 DOMINIO_DEMO = "demo.invalid"
 QUEBRADO = {404, 410}
+BLOQUEIO_ROBO = {401, 403, 429}
 
 
 def host(url: str) -> str:
@@ -47,7 +49,9 @@ def segue_padrao(url: str, padrao: str | None) -> bool:
 
 
 def validar_link(url: str, dominios: list[str], http: ClienteHTTP | None, *, demo: bool = False,
-                 verificar_http: bool = True, padrao: str | None = None) -> ResultadoValidacao:
+                 verificar_http: bool = True, padrao: str | None = None, dominios_destino: list[str] | None = None,
+                 parametros_afiliado: list[str] | None = None, id_afiliado: str | None = None,
+                 exigir_atribuicao: bool = False, resolver=None) -> ResultadoValidacao:
     if not url or not url.lower().startswith("https://") or any(c.isspace() for c in url):
         return ResultadoValidacao(False, "o link precisa começar com https:// e não ter espaços")
     if not dominio_permitido(url, dominios):
@@ -58,16 +62,25 @@ def validar_link(url: str, dominios: list[str], http: ClienteHTTP | None, *, dem
         if demo:
             return ResultadoValidacao(True, "link de demonstração (não acessado)")
         return ResultadoValidacao(False, "link de demonstração em oferta real")
+    params = [p.lower() for p in (parametros_afiliado or []) if p]
+    if exigir_atribuicao and not params:
+        return ResultadoValidacao(False, "configure os identificadores de afiliado da loja antes de publicar "
+                                         "(marketplaces.parametros_afiliado): sem isso não dá para provar a comissão")
     if not verificar_http or http is None:
+        if exigir_atribuicao:
+            return ResultadoValidacao(False, "em produção o link precisa ser aberto para provar a atribuição")
         return ResultadoValidacao(True, "domínio conferido (verificação de acesso desligada)")
     try:
-        resp = http.get(url, allow_redirects=True, stream=True, ok_status=tuple(range(400, 600)))
+        permitidos = None if dominios_destino is None else list(dominios) + list(dominios_destino)
+        resp, cadeia = seguir(http, url, resolver=resolver, hosts_permitidos=permitidos)
+    except UrlRecusada as e:
+        return ResultadoValidacao(False, f"link recusado: {e}")
     except ErroIntegracao as e:
         if e.temporario:
             raise LinkTemporariamenteIndisponivel(str(e)) from e
         return ResultadoValidacao(False, f"link não abre: {e}")
     status = resp.status_code
-    final = getattr(resp, "url", None) or url
+    final = cadeia[-1]
     try:
         resp.close()
     except Exception:
@@ -76,7 +89,46 @@ def validar_link(url: str, dominios: list[str], http: ClienteHTTP | None, *, dem
         return ResultadoValidacao(False, f"link quebrado (HTTP {status})", status)
     if status >= 500:
         raise LinkTemporariamenteIndisponivel(f"loja respondeu HTTP {status}")
-    if final != url and status < 400 and urlparse(final).path in ("", "/") and not urlparse(final).query:
+    if not (200 <= status < 300 or status in BLOQUEIO_ROBO):
+        return ResultadoValidacao(False, f"resposta HTTP inesperada ({status})", status)
+    destinos = dominios_destino if dominios_destino is not None else None
+    if destinos is not None and not host_permitido(host(final), list(destinos) + list(dominios)):
+        return ResultadoValidacao(False, f"o link termina em {host(final)}, que não é um site da loja", status)
+    pagina_inicial = urlparse(final).path in ("", "/")
+    if len(cadeia) > 1 and pagina_inicial and (not urlparse(final).query or exigir_atribuicao):
         return ResultadoValidacao(False, "o link leva para a página inicial da loja (afiliação expirada ou inválida)", status)
-    # 2xx/3xx = abriu. 401/403/429 = a loja respondeu, mas bloqueia robôs: o link existe.
-    return ResultadoValidacao(True, None, status)
+    atribuicao = False
+    if params:
+        valores = {k.lower(): v for k, v in parse_qsl(urlparse(final).query, keep_blank_values=True)}
+        achados = {p: valores[p] for p in params if p in valores}
+        if not achados:
+            return ResultadoValidacao(False, "o link perdeu o identificador de afiliado no caminho "
+                                             f"(esperado um destes parâmetros: {', '.join(params)})", status)
+        if id_afiliado and not any(contem_id(v, id_afiliado) for v in achados.values()):
+            return ResultadoValidacao(False, "o identificador de afiliado do link é de outra conta: a comissão não seria sua", status)
+        # comprovação: chegou a um site de DESTINO da loja (não ficou no encurtador) com o parâmetro
+        # e, se configurado, com o SEU ID de afiliado
+        no_destino = bool(destinos) and host_permitido(host(final), list(destinos)) and len(cadeia) > 1
+        atribuicao = no_destino and (bool(id_afiliado) or not exigir_atribuicao)
+    if exigir_atribuicao:
+        if not destinos:
+            return ResultadoValidacao(False, "configure os domínios de destino da loja (marketplaces.dominios_destino): "
+                                             "sem eles não dá para provar que o link chega à loja", status)
+        if not id_afiliado:
+            return ResultadoValidacao(False, "configure o seu ID de afiliado (marketplaces.id_afiliado): sem ele não dá "
+                                             "para provar que a comissão é sua", status)
+        if not atribuicao:
+            return ResultadoValidacao(False, "atribuição não comprovada: o link não chegou ao site da loja com o seu "
+                                             "identificador de afiliado" + (f" (a loja bloqueou o robô, HTTP {status})"
+                                                                            if status in BLOQUEIO_ROBO else ""), status)
+    # 2xx = abriu. 401/403/429 = a loja respondeu, mas bloqueia robôs: o link existe.
+    return ResultadoValidacao(True, None if 200 <= status < 300 else f"loja bloqueou o robô (HTTP {status})", status,
+                              atribuicao=atribuicao)
+
+
+def contem_id(valor: str, id_afiliado: str) -> bool:
+    """O ID de afiliado precisa aparecer como um TOKEN inteiro do valor (12 não casa com 3124)."""
+    alvo = str(id_afiliado).strip().lower()
+    if not alvo:
+        return False
+    return re.search(r"(?<![0-9a-z])" + re.escape(alvo) + r"(?![0-9a-z])", str(valor).lower()) is not None

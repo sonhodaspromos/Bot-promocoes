@@ -1,6 +1,6 @@
 // Ponto de entrada: autenticação, navegação entre telas, faixa de demonstração e "Publicar agora".
-import { sb, publicarAgora } from "./api.js";
-import { papelAtual, sair, sessaoAtual, telaLogin, telaSemAcesso } from "./auth.js";
+import { sb, publicarAgora, mensagemErro } from "./api.js";
+import { minhaSessao, sair, sessaoAtual, telaLogin, telaMfa, telaSemAcesso } from "./auth.js";
 import { $, $$, aviso, esc } from "./ui.js";
 
 const TELAS = {
@@ -9,6 +9,8 @@ const TELAS = {
   nova: () => import("./telas/nova.js"),
   cupons: () => import("./telas/cupons.js"),
   comissoes: () => import("./telas/comissoes.js"),
+  financeiro: () => import("./telas/financeiro.js"),
+  desempenho: () => import("./telas/desempenho.js"),
   logs: () => import("./telas/logs.js"),
   ajustes: () => import("./telas/ajustes.js"),
 };
@@ -51,7 +53,13 @@ async function iniciar() {
   const sessao = await sessaoAtual();
   if (!sessao) return telaLogin(conteudo, iniciar);
   ctx.email = sessao.user?.email || "";
-  ctx.papel = await papelAtual();
+  let s = await minhaSessao();
+  if (s.mfa_exigido !== false && s.aal !== "aal2") {
+    $("#btn-sair").classList.remove("hide");
+    // o 2º fator vale para todos: sem ele o banco não libera nenhum dado (papel_atual exige aal2)
+    return telaMfa(conteudo, async () => { await sb.auth.refreshSession(); iniciar(); });
+  }
+  ctx.papel = s.papel;
   if (!ctx.papel) {
     $("#btn-sair").classList.remove("hide");
     return telaSemAcesso(conteudo, ctx.email);
@@ -65,9 +73,11 @@ async function iniciar() {
   $("#papel").classList.remove("hide");
   $("#btn-sair").classList.remove("hide");
   $("#btn-publicar").classList.toggle("hide", !ctx.podeEditar);
+  $("#btn-parar").classList.toggle("hide", !ctx.podeEditar);
   $$('#nav button[data-precisa="editar"]').forEach((b) => b.classList.toggle("hide", !ctx.podeEditar));
   $("#nav").classList.remove("hide");
   atualizarFaixaDemo().catch(() => {});
+  atualizarParada().catch(() => {});
   abrir(location.hash.slice(1) || "resumo");
 }
 
@@ -79,6 +89,35 @@ $("#btn-publicar").addEventListener("click", async (ev) => {
   try { aviso(await publicarAgora()); } catch (e) { aviso(e.message, "erro"); }
   setTimeout(() => (botao.disabled = false), 5000);
 });
+// ---- botão de emergência: interrompe TODAS as publicações reais (editor ativa; só o dono reativa)
+async function atualizarParada() {
+  const { data } = await sb.from("configuracoes").select("chave,valor").in("chave", ["sistema.parada_emergencia", "sistema.parada_motivo"]);
+  const v = Object.fromEntries((data || []).map((c) => [c.chave, c.valor]));
+  ctx.parada = v["sistema.parada_emergencia"] === true;
+  const faixa = $("#faixa-parada"), botao = $("#btn-parar");
+  faixa.classList.toggle("hide", !ctx.parada);
+  faixa.textContent = ctx.parada ? `⛔ PUBLICAÇÕES INTERROMPIDAS — ${v["sistema.parada_motivo"] || "parada de emergência"}` : "";
+  botao.textContent = ctx.parada ? "▶ Retomar" : "⛔ Parar tudo";
+  botao.classList.toggle("hide", !ctx.podeEditar || (ctx.parada && !ctx.ehDono));
+}
+$("#btn-parar").addEventListener("click", async () => {
+  try {
+    if (ctx.parada) {
+      if (!confirm("Retomar as publicações reais?")) return;
+      const { error } = await sb.rpc("desativar_parada_emergencia");
+      if (error) throw new Error(mensagemErro(error));
+      aviso("Publicações retomadas ✔ (valem a partir da próxima rodada)");
+    } else {
+      const motivo = prompt("PARAR TODAS as publicações reais agora? Descreva o motivo:");
+      if (!motivo) return;
+      const { error } = await sb.rpc("ativar_parada_emergencia", { p_motivo: motivo });
+      if (error) throw new Error(mensagemErro(error));
+      aviso("⛔ Publicações interrompidas. Nada mais sai até o dono retomar.", "erro");
+    }
+    await atualizarParada();
+  } catch (e) { aviso(e.message, "erro"); }
+});
+
 window.addEventListener("hashchange", () => ctx.papel && abrir(location.hash.slice(1)));
 sb.auth.onAuthStateChange((evento) => { if (evento === "SIGNED_OUT") location.reload(); });
 

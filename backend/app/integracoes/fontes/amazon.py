@@ -1,0 +1,117 @@
+"""Amazon · Creators API (sucessora oficial da Product Advertising API 5.0).
+
+Conferido na documentação oficial do Creators API (25/11/2026):
+  * Brasil (www.amazon.com.br) fica na região NA: credencial versão 3.1, token do Login with Amazon em
+    https://api.amazon.com/auth/o2/token (POST JSON: grant_type=client_credentials, client_id,
+    client_secret, scope="creatorsapi::default"; resposta access_token + expires_in, ex.: 3600);
+  * catálogo em https://creatorsapi.amazon/catalog/v1/<operação> (searchItems, getItems), com os
+    cabeçalhos Authorization: Bearer e x-marketplace, e marketplace/partnerTag no corpo;
+  * limites: credencial nova começa com 1 requisição/s e 8.640 por dia (30 primeiros dias), escalando com
+    a receita enviada pelos links da API; acima do limite, ou sem vendas qualificadas por 30 dias seguidos,
+    a API responde HTTP 429 TooManyRequests.
+AMAZON_TOKEN_URL e AMAZON_API_URL são opcionais (substituem os endereços acima, ex.: outra região).
+
+ATENÇÃO: implementado e testado só com dublês. NÃO validado com credenciais reais.
+"""
+from __future__ import annotations
+
+import time
+
+from ...cliente_http import ClienteHTTP
+from ...erros import ErroIntegracao
+from ...modelos import OfertaEncontrada
+from ..base import REAL, FonteOfertas
+
+
+def _caminho(d, *chaves):
+    for c in chaves:
+        if isinstance(d, list):
+            d = d[0] if d else None
+        if not isinstance(d, dict):
+            return None
+        d = d.get(c)
+    return d
+
+
+TOKEN_URL_NA = "https://api.amazon.com/auth/o2/token"     # região NA (US, CA, MX, BR), credencial v3.1
+API_URL = "https://creatorsapi.amazon/catalog/v1"
+MARKETPLACE = "www.amazon.com.br"
+
+
+class AmazonFonte(FonteOfertas):
+    codigo = "amazon"
+    modo = REAL
+    suporta_consulta = True
+
+    def __init__(self, credencial_id: str, segredo: str, partner_tag: str, token_url: str | None = None,
+                 api_url: str | None = None, *,
+                 http: ClienteHTTP | None = None, relogio=time.time):
+        token_url = TOKEN_URL_NA if token_url is None else token_url
+        api_url = API_URL if api_url is None else api_url
+        if not token_url.startswith("https://") or not api_url.startswith("https://"):
+            raise ErroIntegracao("AMAZON_TOKEN_URL e AMAZON_API_URL precisam ser https (da documentação oficial)",
+                                 servico="amazon")
+        self.credencial_id, self.segredo, self.tag = credencial_id, segredo, partner_tag
+        self.token_url, self.api_url = token_url, api_url.rstrip("/")
+        self.http = http or ClienteHTTP("amazon")
+        self.relogio = relogio
+        self._token, self._expira = None, 0.0
+
+    def _bearer(self) -> str:
+        if self._token and self.relogio() < self._expira - 60:
+            return self._token
+        r = self.http.post(self.token_url, json={"grant_type": "client_credentials", "client_id": self.credencial_id,
+                                                  "client_secret": self.segredo, "scope": "creatorsapi::default"}).json()
+        if not r.get("access_token"):
+            raise ErroIntegracao("Amazon não devolveu access_token (credencial ou elegibilidade)", servico="amazon")
+        self._token, self._expira = r["access_token"], self.relogio() + float(r.get("expires_in") or 3600)
+        return self._token
+
+    def _chamar(self, operacao: str, corpo: dict, _renovou: bool = False) -> dict:
+        corpo = {"partnerTag": self.tag, "partnerType": "Associates", "marketplace": MARKETPLACE, **corpo}
+        try:
+            r = self.http.post(f"{self.api_url}/{operacao}", json=corpo,
+                               headers={"Authorization": f"Bearer {self._bearer()}", "x-marketplace": MARKETPLACE}).json()
+        except ErroIntegracao as e:
+            if e.autenticacao and not _renovou:
+                self._token, self._expira = None, 0.0   # token revogado/expirado antes da hora: renova uma vez
+                return self._chamar(operacao, corpo, _renovou=True)
+            raise
+        if r.get("errors"):
+            raise ErroIntegracao(f"Amazon recusou: {r['errors'][0].get('message') or r['errors'][0]}", servico="amazon")
+        return r
+
+    def _oferta(self, item: dict) -> OfertaEncontrada | None:
+        preco = _caminho(item, "offersV2", "listings", "price", "money", "amount")
+        link = item.get("detailPageURL") or ""
+        if not preco or not link or not item.get("asin"):
+            return None
+        anterior = _caminho(item, "offersV2", "listings", "price", "savingBasis", "money", "amount")
+        disponivel = (_caminho(item, "offersV2", "listings", "availability", "type") or "IN_STOCK") == "IN_STOCK"
+        return OfertaEncontrada(
+            marketplace="amazon", id_externo=str(item["asin"]),
+            titulo=str(_caminho(item, "itemInfo", "title", "displayValue") or "")[:300], preco=float(preco),
+            preco_original=float(anterior) if anterior and float(anterior) > float(preco) else None, link_afiliado=link,
+            imagem_url=_caminho(item, "images", "primary", "large", "url"), disponivel=disponivel,
+            marca=_caminho(item, "itemInfo", "byLineInfo", "brand", "displayValue"),
+            loja_oficial=None, comissao_pct=None)  # a API não informa comissão por item: "sem dados" (nada inventado)
+
+    def buscar(self, palavra, limite=30):
+        r = self._chamar("searchItems", {"keywords": palavra, "itemCount": min(int(limite), 10),
+                                         "resources": ["itemInfo.title", "itemInfo.byLineInfo", "images.primary.large",
+                                                       "offersV2.listings.price", "offersV2.listings.availability"]})
+        itens = _caminho(r, "searchResult", "items") or []
+        return [o for o in (self._oferta(i) for i in itens) if o]
+
+    def consultar(self, id_externo):
+        r = self._chamar("getItems", {"itemIds": [str(id_externo)], "itemIdType": "ASIN",
+                                      "resources": ["itemInfo.title", "offersV2.listings.price", "offersV2.listings.availability"]})
+        itens = _caminho(r, "itemsResult", "items") or []
+        return self._oferta(itens[0]) if itens else None
+
+    def testar(self):
+        ofertas = self.buscar("fone bluetooth", limite=1)
+        if not ofertas:
+            raise ErroIntegracao("a API respondeu sem itens", servico="amazon")
+        self.amostra_link = ofertas[0].link_afiliado
+        return "amazon: REAL ✔ Creators API respondeu (busca de 1 item)"

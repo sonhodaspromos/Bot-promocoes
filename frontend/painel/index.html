@@ -19,9 +19,11 @@
     </div>
     <div class="topo-acoes">
       <button id="btn-publicar" class="b claro hide" title="Rodar o bot agora">⚡ Publicar agora</button>
+      <button id="btn-parar" class="b erro hide" title="Interromper todas as publicações reais">⛔ Parar tudo</button>
       <button id="btn-sair" class="b claro hide">Sair</button>
     </div>
   </header>
+  <div id="faixa-parada" class="faixa-demo hide" role="alert" style="background:#b00020;color:#fff"></div>
   <div id="faixa-demo" class="faixa-demo hide" role="status"></div>
 
   <main id="conteudo" aria-live="polite">
@@ -34,6 +36,8 @@
     <button data-tela="nova" data-precisa="editar"><span>➕</span>Nova</button>
     <button data-tela="cupons"><span>🎟</span>Cupons</button>
     <button data-tela="comissoes"><span>💰</span>Comissões</button>
+    <button data-tela="financeiro"><span>📊</span>Financeiro</button>
+    <button data-tela="desempenho"><span>📈</span>Desempenho</button>
     <button data-tela="logs"><span>📜</span>Logs</button>
     <button data-tela="ajustes"><span>⚙️</span>Ajustes</button>
   </nav>

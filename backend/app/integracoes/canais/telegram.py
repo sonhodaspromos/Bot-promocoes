@@ -59,4 +59,9 @@ class TelegramCanal(CanalPublicacao):
     def testar(self):
         eu = self._chamar("getMe")
         chat = self._chamar("getChat", data={"chat_id": self.chat})
-        return f"telegram: REAL ✔ bot @{eu.get('username')} no canal {chat.get('title') or self.chat}"
+        membro = self._chamar("getChatMember", data={"chat_id": self.chat, "user_id": eu.get("id")})
+        pode = membro.get("status") == "creator" or (membro.get("status") == "administrator" and membro.get("can_post_messages", True)
+                                                     and membro.get("can_edit_messages", True))
+        if not pode:
+            raise ErroIntegracao("o bot não é administrador com permissão de publicar e editar no canal", servico="telegram")
+        return f"telegram: REAL ✔ bot @{eu.get('username')} administrador de {chat.get('title') or self.chat} (publica e edita)"

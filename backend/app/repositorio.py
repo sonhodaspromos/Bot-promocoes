@@ -21,8 +21,27 @@ def agora() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _agrupar_cancelamentos(pares):
+    saida: dict[str, dict] = {}
+    for codigo, status in pares:
+        if not codigo:
+            continue
+        d = saida.setdefault(codigo, {"canceladas": 0, "decididas": 0})
+        d["decididas"] += 1
+        d["canceladas"] += status == "cancelada"
+    return saida
+
+
 def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat()
+
+
+def agora_iso_menos(minutos: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutos)).isoformat()
+
+
+CAMPOS_OPCIONAIS_PRODUTO = ("gtin", "marca", "modelo", "vendedor_id", "vendedor_nome", "loja_oficial", "estoque")
 
 
 class Repositorio(ABC):
@@ -50,7 +69,9 @@ class Repositorio(ABC):
     @abstractmethod
     def salvar_link(self, produto_id: int, promocao_id: int | None, url: str) -> int: ...
     @abstractmethod
-    def links_pendentes(self, limite: int) -> list[dict]: ...
+    def links_pendentes(self, limite: int, revalidar_atribuicao_horas: float | None = None) -> list[dict]:
+        """Links a validar. `url` é o destino EFETIVO do clique (url_curta, se houver). Com
+        revalidar_atribuicao_horas, inclui links já validados sem comprovação recente de atribuição."""
     @abstractmethod
     def registrar_validacao(self, link_id: int, resultado: ResultadoValidacao) -> None: ...
 
@@ -70,9 +91,31 @@ class Repositorio(ABC):
     @abstractmethod
     def promocoes_para_enfileirar(self, limite: int) -> list[dict]: ...
     @abstractmethod
-    def enfileirar(self, promocao_id: int, canal_id: int, link_id: int, prioridade: int = 5) -> bool: ...
+    def enfileirar(self, promocao_id: int, canal_id: int, link_id: int, prioridade: int = 5,
+                   agendado_para: datetime | None = None) -> bool: ...
     @abstractmethod
     def pegar_fila(self, limite: int) -> list[ItemFila]: ...
+    @abstractmethod
+    def parada_emergencia(self) -> bool:
+        """Lê o botão de emergência direto do banco (sem cache)."""
+    @abstractmethod
+    def fila_atrasada(self, minutos: int) -> int:
+        """Itens pendentes cujo horário passou há mais de `minutos` (ofertas que deveriam ter saído)."""
+    @abstractmethod
+    def produto(self, produto_id: int) -> dict | None:
+        """id, id_externo, marketplace (código), preco_atual, disponivel, verificado_em."""
+    @abstractmethod
+    def reservar_envio(self, fila_id: int) -> bool:
+        """Reserva exclusiva do item ANTES do envio externo. False ou erro = não enviar."""
+    @abstractmethod
+    def reservar_envio_cupom(self, cupom_id: int, canal_id: int) -> int | None:
+        """Grava 'enviando' antes de publicar o cupom. None = já publicado hoje ou envio anterior incerto."""
+    @abstractmethod
+    def esquema_publicacao(self) -> dict:
+        """Versão do esquema, RPCs, configurações e colunas exigidas para publicar de verdade."""
+    @abstractmethod
+    def link_atribuicao(self, link_id: int) -> datetime | None:
+        """Quando a atribuição do link foi comprovada (None = nunca)."""
     @abstractmethod
     def marcar_publicando(self, fila_id: int) -> None:
         """Marca o item logo antes de enviar ao canal (proteção contra post duplicado se o job morrer)."""
@@ -85,7 +128,9 @@ class Repositorio(ABC):
     @abstractmethod
     def dados_publicacao(self, promocao_id: int) -> dict | None: ...
     @abstractmethod
-    def registrar_publicacao(self, item: ItemFila, sucesso: bool, id_mensagem: str | None, erro: str | None) -> None: ...
+    def registrar_publicacao(self, item: ItemFila, sucesso: bool, id_mensagem: str | None, erro: str | None,
+                             extras: dict | None = None) -> None:
+        """extras: experimento_id e variante do teste A/B (opcional)."""
     @abstractmethod
     def publicacoes_desde(self, desde: datetime, tipos: list[str]) -> list[dict]: ...
     @abstractmethod
@@ -127,7 +172,63 @@ class Repositorio(ABC):
 
     # ---- comissões, execuções, logs, credenciais
     @abstractmethod
-    def salvar_comissoes(self, marketplace_id: int, itens: list[dict]) -> int: ...
+    def salvar_comissoes(self, marketplace_id: int, itens: list[dict]) -> dict:
+        """Cria ou ATUALIZA (status e valores mudam: pendente → confirmada/cancelada). Comissão já 'paga' não volta atrás.
+        Devolve {"novos", "atualizados", "ignorados"}."""
+    @abstractmethod
+    def comissoes_api_periodo(self, marketplace_id: int, inicio: str, fim: str) -> list[dict]: ...
+    @abstractmethod
+    def registrar_importacao(self, dados: dict) -> None: ...
+    @abstractmethod
+    def ultima_importacao(self, marketplace_id: int, tipo: str) -> datetime | None: ...
+    # ---- inteligência comercial (migration 019; sem ela, tudo devolve "sem dados")
+    @abstractmethod
+    def dados_ranking(self, promocao_ids: list[int]) -> dict[int, dict]:
+        """Por oferta: produto, marketplace, título, preço, comissão (e se é oficial), categoria, faixa,
+        vendedor, estoque, GTIN/marca/modelo e o resumo da análise (pontuação, desconto comprovado)."""
+    @abstractmethod
+    def desempenho_publicacoes(self, desde: datetime) -> list[dict]:
+        """Linhas de vw_desempenho_publicacoes desde a data (vazio sem a migration 019)."""
+    @abstractmethod
+    def salvar_selecoes(self, decisoes: list[dict]) -> None: ...
+    @abstractmethod
+    def salvar_equivalencias(self, achados: list[dict]) -> None: ...
+    @abstractmethod
+    def experimento_ativo(self) -> dict | None: ...
+    @abstractmethod
+    def salvar_resultado_experimento(self, experimento_id: int, resultado: dict) -> None: ...
+    @abstractmethod
+    def salvar_resumo_inteligencia(self, tipo: str, dados: dict) -> None: ...
+    # ---- expansão modular (migration 020). Implementações nas duas classes; sem a 020, ErroBanco.
+    def salvar_configuracao(self, chave: str, valor) -> None: raise NotImplementedError
+    def canais_categorias(self) -> dict[int, list[int]]: raise NotImplementedError
+    def ultimo_agendado(self, canal_id: int) -> datetime | None: raise NotImplementedError
+    def tarefa_enfileirar(self, tipo: str, payload: dict, chave: str | None = None, agendar_para: datetime | None = None) -> int | None: raise NotImplementedError
+    def tarefas_pegar(self, tipos: list[str], limite: int, bloqueio_min: int, worker: str) -> list[dict]: raise NotImplementedError
+    def tarefa_concluir(self, tarefa_id: int, ok: bool, erro: str | None, resultado: dict | None, worker: str) -> bool: raise NotImplementedError
+    def ofertas_vitrine(self, dias: int = 7) -> list[dict]: raise NotImplementedError
+    def cupons_vitrine(self) -> list[dict]: raise NotImplementedError
+    def ofertas_publicadas_desde(self, desde: datetime) -> list[dict]: raise NotImplementedError
+    def criar_alerta(self, chat_id: int, termo: str, preco_maximo: float | None) -> None: raise NotImplementedError
+    def alertas_da_pessoa(self, chat_id: int) -> list[dict]: raise NotImplementedError
+    def apagar_alerta(self, alerta_id: int) -> None: raise NotImplementedError
+    def alertas_apagar_tudo(self, chat_id: int) -> None: raise NotImplementedError
+    def alertas_ativos(self) -> list[dict]: raise NotImplementedError
+    def registrar_aviso(self, alerta_id: int, promocao_id: int) -> bool: raise NotImplementedError
+    def avisos_hoje_por_pessoa(self) -> dict[int, int]: raise NotImplementedError
+    def whatsapp_destinatarios(self, categoria_id: int | None, max_dia: int, promocao_id: int) -> list[dict]: raise NotImplementedError
+    def whatsapp_reservar(self, inscrito_id: int, promocao_id: int) -> bool: raise NotImplementedError
+    def whatsapp_gasto_hoje(self) -> float: raise NotImplementedError
+    def whatsapp_reservar_envio(self, inscrito_id: int, promocao_id: int, custo: float, teto: float, max_dia: int) -> str: raise NotImplementedError
+    def orcamento_reservar(self, servico: str, valor: float, teto: float) -> bool: raise NotImplementedError
+    def orcamento_estornar(self, servico: str, valor: float) -> None: raise NotImplementedError
+    def orcamento_situacao(self, servico: str) -> dict: raise NotImplementedError
+    def tarefa_renovar(self, tarefa_id: int, worker: str, bloqueio_min: int) -> bool: raise NotImplementedError
+    def fila_saude(self) -> dict: raise NotImplementedError
+    def taxas_cancelamento(self, dias: int = 180) -> dict[str, dict]: raise NotImplementedError
+    def whatsapp_evento(self, inscrito_id: int | None, tipo: str, custo: float | None, detalhe: str | None) -> None: raise NotImplementedError
+    def whatsapp_inscrever(self, telefone: str, origem: str, texto: str, categorias: list[int] | None = None) -> int: raise NotImplementedError
+    def whatsapp_descadastrar(self, telefone: str) -> bool: raise NotImplementedError
     @abstractmethod
     def iniciar_execucao(self, origem: str, modo: str, versao: str) -> str: ...
     @abstractmethod
@@ -215,17 +316,38 @@ class SupabaseRepositorio(Repositorio):
             "nota": oferta.nota, "total_vendas": oferta.total_vendas, "imagem_url": oferta.imagem_url,
             "url_produto": oferta.url_produto, "disponivel": oferta.disponivel,
             "verificado_em": iso(agora()),
+            "preco_maximo_variacao": round(oferta.preco_maximo, 2) if oferta.preco_maximo else None,
+            "referencia_derivada": bool(oferta.referencia_derivada),
         }
+        # dados opcionais: só gravados quando a loja informou (não apaga o que já se sabia)
+        for campo in CAMPOS_OPCIONAIS_PRODUTO:
+            valor = getattr(oferta, campo, None)
+            if valor is not None:
+                dados[campo] = valor
         existente = self._get("produtos", select="id", marketplace_id=f"eq.{marketplace_id}",
                               id_externo=f"eq.{oferta.id_externo}")
         if existente:
             pid = existente[0]["id"]
-            self._req("PATCH", "produtos", params={"id": f"eq.{pid}"}, corpo=dados, prefer="return=minimal")
+            self._gravar_produto("PATCH", {"id": f"eq.{pid}"}, dados, "return=minimal")
             return pid, False
         dados.update({"marketplace_id": marketplace_id, "id_externo": oferta.id_externo,
                       "categoria_id": categoria_id, "demo": oferta.demo})
-        linhas = self._req("POST", "produtos", params={"select": "id"}, corpo=dados, prefer="return=representation")
+        linhas = self._gravar_produto("POST", {"select": "id"}, dados, "return=representation")
         return linhas[0]["id"], True
+
+    def _gravar_produto(self, metodo, params, dados, prefer):
+        try:
+            return self._req(metodo, "produtos", params=params, corpo=dados, prefer=prefer)
+        except ErroBanco as e:
+            if e.codigo not in ("PGRST204", "42703"):
+                raise
+            # banco sem a migration 017: grava sem os campos novos (variação e "preço de" derivado)
+            novos = ("preco_maximo_variacao", "referencia_derivada") if e.codigo == "PGRST204" and \
+                not any(c in dados for c in CAMPOS_OPCIONAIS_PRODUTO) else ()
+            enxuto = {k: v for k, v in dados.items() if k not in CAMPOS_OPCIONAIS_PRODUTO and k not in novos}
+            if enxuto == dados:
+                enxuto = {k: v for k, v in dados.items() if k not in ("preco_maximo_variacao", "referencia_derivada")}
+            return self._req(metodo, "produtos", params=params, corpo=enxuto, prefer=prefer)
 
     def criar_promocao(self, produto_id, oferta, status, origem):
         try:
@@ -257,35 +379,61 @@ class SupabaseRepositorio(Repositorio):
                            corpo={"produto_id": produto_id, "promocao_id": promocao_id, "url": url})
         return linhas[0]["id"]
 
-    def links_pendentes(self, limite):
-        # links nunca verificados, de produtos com promoção aprovada ou publicada
+    def links_pendentes(self, limite, revalidar_atribuicao_horas=None):
+        # links nunca verificados (e, em produção, validados sem atribuição comprovada recentemente),
+        # de produtos com promoção aprovada ou publicada
+        filtro = {"validado": "is.false", "status_http": "is.null"}
+        if revalidar_atribuicao_horas:
+            limite_iso = agora_iso_menos(int(float(revalidar_atribuicao_horas) * 60))
+            filtro = {"or": f"(and(validado.is.false,status_http.is.null),and(validado.is.true,or(atribuicao_verificada_em.is.null,"
+                            f"atribuicao_verificada_em.lt.{limite_iso})))"}
+
         def buscar(colunas):
             return self._get(
                 "links_afiliados",
-                select=f"id,url,produto_id,produtos!inner(demo,marketplaces!inner({colunas}),promocoes!inner(status))",
-                validado="is.false", ativo="is.true", status_http="is.null",
+                select=f"id,url,url_curta,produto_id,produtos!inner(demo,marketplaces!inner({colunas}),promocoes!inner(status))",
+                ativo="is.true", **filtro,
                 **{"produtos.promocoes.status": "in.(aprovada,publicada)"}, limit=str(limite))
-        try:
-            linhas = buscar("codigo,dominios_afiliado,padrao_afiliado")
-        except ErroBanco as e:
-            if e.codigo not in ("42703", "PGRST200", "PGRST204"):
-                raise
-            linhas = buscar("codigo,dominios_afiliado")  # migration 015 ainda não aplicada
-        return [{"link_id": l["id"], "url": l["url"], "produto_id": l["produto_id"],
+        linhas = None
+        for colunas in ("codigo,dominios_afiliado,padrao_afiliado,dominios_destino,parametros_afiliado,id_afiliado",
+                        "codigo,dominios_afiliado,padrao_afiliado",   # banco sem a migration 017
+                        "codigo,dominios_afiliado"):                   # banco sem a migration 015
+            try:
+                linhas = buscar(colunas)
+                break
+            except ErroBanco as e:
+                if e.codigo not in ("42703", "PGRST200", "PGRST204"):
+                    raise
+        return [{"link_id": l["id"], "url": l.get("url_curta") or l["url"], "produto_id": l["produto_id"],
                  "demo": l["produtos"]["demo"], "marketplace": l["produtos"]["marketplaces"]["codigo"],
                  "dominios": l["produtos"]["marketplaces"]["dominios_afiliado"],
-                 "padrao": l["produtos"]["marketplaces"].get("padrao_afiliado")} for l in linhas]
+                 "padrao": l["produtos"]["marketplaces"].get("padrao_afiliado"),
+                 "dominios_destino": l["produtos"]["marketplaces"].get("dominios_destino"),
+                 "parametros_afiliado": l["produtos"]["marketplaces"].get("parametros_afiliado") or [],
+                 "id_afiliado": l["produtos"]["marketplaces"].get("id_afiliado")} for l in linhas]
 
     def registrar_validacao(self, link_id, resultado):
-        self._req("PATCH", "links_afiliados", params={"id": f"eq.{link_id}"}, prefer="return=minimal", corpo={
-            "validado": resultado.valido, "status_http": resultado.status_http,
-            "motivo_invalido": None if resultado.valido else (resultado.motivo or "inválido")[:300],
-        })
+        corpo = {"validado": resultado.valido, "status_http": resultado.status_http,
+                 "motivo_invalido": None if resultado.valido else (resultado.motivo or "inválido")[:300],
+                 "atribuicao_verificada_em": datetime.now(timezone.utc).isoformat()
+                 if resultado.valido and resultado.atribuicao else None}
+        try:
+            self._req("PATCH", "links_afiliados", params={"id": f"eq.{link_id}"}, prefer="return=minimal", corpo=corpo)
+        except ErroBanco as e:
+            if e.codigo not in ("PGRST204", "42703"):
+                raise
+            corpo.pop("atribuicao_verificada_em")  # banco sem a migration 018: atribuição nunca conta como comprovada
+            self._req("PATCH", "links_afiliados", params={"id": f"eq.{link_id}"}, prefer="return=minimal", corpo=corpo)
+
+    def link_atribuicao(self, link_id):
+        linhas = self._get("links_afiliados", select="atribuicao_verificada_em", id=f"eq.{link_id}")
+        valor = linhas[0].get("atribuicao_verificada_em") if linhas else None
+        return datetime.fromisoformat(valor.replace("Z", "+00:00")) if valor else None
 
     # ------------------------------------------------------------ publicação
     def promocoes_para_enfileirar(self, limite):
         linhas = self._get("vw_promocoes_painel",
-                           select="id,produto_id,link_id,desconto_pct,demo,marketplace,origem,pontuacao,classificacao",
+                           select="id,produto_id,link_id,desconto_pct,demo,marketplace,origem,pontuacao,classificacao,categoria_id",
                            status="eq.aprovada", link_validado="is.true", classificacao="in.(excelente,boa)",
                            order="pontuacao.desc,desconto_pct.desc", limit=str(limite * 3))
         if not linhas:
@@ -295,10 +443,12 @@ class SupabaseRepositorio(Repositorio):
             status="in.(pendente,processando)")}
         return [l for l in linhas if l["id"] not in na_fila][:limite]
 
-    def enfileirar(self, promocao_id, canal_id, link_id, prioridade=5):
+    def enfileirar(self, promocao_id, canal_id, link_id, prioridade=5, agendado_para=None):
+        corpo = {"promocao_id": promocao_id, "canal_id": canal_id, "link_afiliado_id": link_id, "prioridade": prioridade}
+        if agendado_para is not None:
+            corpo["agendado_para"] = iso(agendado_para)
         try:
-            self._req("POST", "fila_publicacoes", prefer="return=minimal", corpo={
-                "promocao_id": promocao_id, "canal_id": canal_id, "link_afiliado_id": link_id, "prioridade": prioridade})
+            self._req("POST", "fila_publicacoes", prefer="return=minimal", corpo=corpo)
         except ErroBanco as e:
             if e.codigo == "23505" or isinstance(e, RegraViolada):
                 return False
@@ -310,8 +460,36 @@ class SupabaseRepositorio(Repositorio):
         return [ItemFila(id=l["id"], promocao_id=l["promocao_id"], canal_id=l["canal_id"],
                          link_afiliado_id=l["link_afiliado_id"], tentativas=l["tentativas"]) for l in linhas]
 
+    def parada_emergencia(self):
+        linhas = self._get("configuracoes", select="valor", chave="eq.sistema.parada_emergencia")
+        return bool(linhas and linhas[0]["valor"] is True)
+
+    def fila_atrasada(self, minutos):
+        limite = (agora_iso_menos(minutos))
+        return len(self._get("fila_publicacoes", select="id", status="eq.pendente", agendado_para=f"lt.{limite}", limit="500"))
+
+    def produto(self, produto_id):
+        linhas = self._get("produtos", select="id,id_externo,preco_atual,disponivel,verificado_em,marketplaces!inner(codigo)",
+                           id=f"eq.{produto_id}")
+        if not linhas:
+            return None
+        p = linhas[0]
+        return {"id": p["id"], "id_externo": p["id_externo"], "marketplace": p["marketplaces"]["codigo"],
+                "preco_atual": float(p["preco_atual"]), "disponivel": p["disponivel"], "verificado_em": p["verificado_em"]}
+
     def marcar_publicando(self, fila_id):
         self._rpc("fila_marcar_publicando", p_id=fila_id)
+
+    def reservar_envio(self, fila_id):
+        # sem fallback: banco sem a RPC (migration 018) = ErroBanco = nada é enviado
+        return self._rpc("fila_reservar_envio", p_id=fila_id) is True
+
+    def reservar_envio_cupom(self, cupom_id, canal_id):
+        r = self._rpc("cupom_reservar_envio", p_cupom=cupom_id, p_canal=canal_id)
+        return int(r) if r is not None else None
+
+    def esquema_publicacao(self):
+        return self._rpc("esquema_publicacao") or {}
 
     def devolver_fila(self, fila_id, minutos, motivo):
         self._rpc("fila_devolver", p_id=fila_id, p_minutos=int(minutos), p_motivo=motivo[:900])
@@ -322,14 +500,21 @@ class SupabaseRepositorio(Repositorio):
     def dados_publicacao(self, promocao_id):
         linhas = self._get("vw_promocoes_painel", id=f"eq.{promocao_id}", select=(
             "id,status,titulo,imagem_url,preco_promocional,preco_referencia,desconto_pct,marketplace,"
-            "marketplace_nome,link_id,link_validado,demo,pontuacao,classificacao"))
+            "marketplace_nome,link_id,link_validado,demo,pontuacao,classificacao,analise,produto_id"))
         return linhas[0] if linhas else None
 
-    def registrar_publicacao(self, item, sucesso, id_mensagem, erro):
-        self._req("POST", "historico_publicacoes", prefer="return=minimal", corpo={
-            "fila_id": item.id, "promocao_id": item.promocao_id, "canal_id": item.canal_id,
-            "link_afiliado_id": item.link_afiliado_id, "resultado": "sucesso" if sucesso else "erro",
-            "id_mensagem_externa": id_mensagem, "erro": None if sucesso else (erro or "erro")[:2000]})
+    def registrar_publicacao(self, item, sucesso, id_mensagem, erro, extras=None):
+        corpo = {"fila_id": item.id, "promocao_id": item.promocao_id, "canal_id": item.canal_id,
+                 "link_afiliado_id": item.link_afiliado_id, "resultado": "sucesso" if sucesso else "erro",
+                 "id_mensagem_externa": id_mensagem, "erro": None if sucesso else (erro or "erro")[:2000]}
+        corpo.update({k: v for k, v in (extras or {}).items() if k in ("experimento_id", "variante") and v is not None})
+        try:
+            self._req("POST", "historico_publicacoes", prefer="return=minimal", corpo=corpo)
+        except ErroBanco as e:
+            if e.codigo not in ("PGRST204", "42703") or "variante" not in corpo:
+                raise
+            corpo.pop("experimento_id", None); corpo.pop("variante", None)   # banco sem a migration 019
+            self._req("POST", "historico_publicacoes", prefer="return=minimal", corpo=corpo)
 
     def publicacoes_desde(self, desde, tipos):
         canais = {c["id"]: c["tipo"] for c in self.canais() if c["tipo"] in tipos}
@@ -351,7 +536,7 @@ class SupabaseRepositorio(Repositorio):
             "promocoes",
             select="id,status,origem,demo,preco_promocional,preco_referencia,comissao_pct,produto_id,"
                    "produtos!inner(titulo,preco_atual,disponivel,nota,total_vendas,imagem_url,categoria_id,"
-                   "categorias(ativa),marketplaces!inner(codigo,modo))",
+                   "preco_maximo_variacao,referencia_derivada,categorias(ativa),marketplaces!inner(codigo,modo))",
             status="in.(encontrada,aprovada,publicada)", analisada_em="is.null", order="criado_em.asc", limit=str(limite))
         if not linhas:
             return []
@@ -371,15 +556,29 @@ class SupabaseRepositorio(Repositorio):
                 "titulo": p["titulo"], "preco_produto": float(p["preco_atual"]), "disponivel": p["disponivel"],
                 "nota": float(p["nota"]) if p["nota"] is not None else None, "total_vendas": p["total_vendas"],
                 "imagem_url": p["imagem_url"],
+                "preco_maximo_variacao": float(p["preco_maximo_variacao"]) if p.get("preco_maximo_variacao") is not None else None,
+                "referencia_derivada": bool(p.get("referencia_derivada")),
                 "categoria_ativa": (p.get("categorias") or {}).get("ativa") if p.get("categoria_id") else None,
                 "marketplace": p["marketplaces"]["codigo"], "marketplace_modo": p["marketplaces"]["modo"],
                 "link": links.get(x["produto_id"])})
         return saida
 
     def historico_precos(self, produto_ids, desde):
+        """Histórico desde `desde` + o último preço ANTES (âncora), para saber o preço no início da janela."""
         if not produto_ids:
             return {}
         saida: dict[int, list[dict]] = {}
+        try:
+            linhas = self._rpc("historico_precos_janela", p_produtos=sorted(set(produto_ids)), p_desde=iso(desde)) or []
+            for h in linhas:
+                saida.setdefault(h["produto_id"], []).append(
+                    {"preco": float(h["preco"]), "disponivel": h["disponivel"], "quando": h["registrado_em"],
+                     "ancora": bool(h.get("ancora"))})
+            return saida
+        except ErroBanco as e:
+            if e.codigo not in ("PGRST202", "42883") and e.status != 404:
+                raise
+            # banco sem a migration 019: sem âncora (janelas que começam antes do 1º registro ficam "insuficientes")
         for h in self._get("historico_precos", select="produto_id,preco,disponivel,registrado_em",
                            produto_id=self._in(sorted(set(produto_ids))), registrado_em=f"gte.{iso(desde)}",
                            order="registrado_em.asc", limit="5000"):
@@ -450,12 +649,249 @@ class SupabaseRepositorio(Repositorio):
 
     # ------------------------------------------------------------ comissões, execução, logs
     def salvar_comissoes(self, marketplace_id, itens):
-        if not itens:
-            return 0
-        corpo = [{**i, "marketplace_id": marketplace_id, "origem": "api"} for i in itens]
-        self._req("POST", "comissoes", params={"on_conflict": "marketplace_id,referencia_externa"},
-                  corpo=corpo, prefer="return=minimal,resolution=ignore-duplicates")
-        return len(corpo)
+        resultado = {"novos": 0, "atualizados": 0, "ignorados": 0}
+        unicos = {i["referencia_externa"]: i for i in itens if i.get("referencia_externa")}
+        if not unicos:
+            return resultado
+        existentes = {}
+        refs = sorted(unicos)
+        for k in range(0, len(refs), 100):
+            for e in self._get("comissoes", select="referencia_externa,status,valor_comissao",
+                               marketplace_id=f"eq.{marketplace_id}", referencia_externa=self._in(refs[k:k + 100])):
+                existentes[e["referencia_externa"]] = e
+        corpo = []
+        for ref, i in unicos.items():
+            antes = existentes.get(ref)
+            if antes and antes["status"] == "paga":
+                resultado["ignorados"] += 1
+                continue
+            if antes is None:
+                resultado["novos"] += 1
+            elif antes["status"] != i.get("status") or float(antes["valor_comissao"]) != float(i["valor_comissao"]):
+                resultado["atualizados"] += 1
+            corpo.append({**i, "marketplace_id": marketplace_id, "origem": "api"})
+        if corpo:
+            try:
+                self._req("POST", "comissoes", params={"on_conflict": "marketplace_id,referencia_externa"},
+                          corpo=corpo, prefer="return=minimal,resolution=merge-duplicates")
+            except ErroBanco as e:
+                if e.codigo not in ("PGRST204", "42703"):
+                    raise
+                corpo = [{k: v for k, v in c.items() if k != "id_externo_item"} for c in corpo]  # sem a migration 019
+                self._req("POST", "comissoes", params={"on_conflict": "marketplace_id,referencia_externa"},
+                          corpo=corpo, prefer="return=minimal,resolution=merge-duplicates")
+        return resultado
+
+    def comissoes_api_periodo(self, marketplace_id, inicio, fim):
+        return self._get("comissoes", select="referencia_externa,status,valor_comissao", marketplace_id=f"eq.{marketplace_id}",
+                         origem="eq.api", data_venda=f"gte.{inicio}", **{"and": f"(data_venda.lte.{fim})"}, limit="10000")
+
+    # ---------------------------------------------------------------- inteligência comercial (019)
+    def _sem_019(self, e: ErroBanco) -> bool:
+        return e.codigo in ("PGRST205", "PGRST204", "PGRST202", "42P01", "42703", "42883") or e.status == 404
+
+    def dados_ranking(self, promocao_ids):
+        if not promocao_ids:
+            return {}
+        campos = "id,produto_id,preco_promocional,comissao_pct,pontuacao,classificacao,analise,origem,demo,produtos!inner({})"
+        produto = "id,titulo,marca,disponivel,demo,{}marketplaces!inner(codigo,modo),categorias(nome)"
+        try:
+            linhas = self._get("promocoes", select=campos.format(produto.format(
+                "gtin,modelo,loja_oficial,estoque,vendedor_nome,")), id=self._in(promocao_ids))
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+            linhas = self._get("promocoes", select=campos.format(produto.format("")), id=self._in(promocao_ids))
+        return {l["id"]: dados_de_ranking(l) for l in linhas}
+
+    def desempenho_publicacoes(self, desde):
+        try:
+            return self._get("vw_desempenho_publicacoes", publicado_em=f"gte.{iso(desde)}", order="publicado_em.desc",
+                             limit="20000")
+        except ErroBanco as e:
+            if self._sem_019(e):
+                return []
+            raise
+
+    def salvar_selecoes(self, decisoes):
+        if not decisoes:
+            return
+        try:
+            self._req("POST", "selecoes_ofertas", prefer="return=minimal", corpo=[{
+                "promocao_id": d["promocao_id"], "selecionada": d["selecionada"], "posicao": d.get("posicao"),
+                "prioridade": d.get("prioridade"), "receita_esperada": d.get("receita_esperada"), "detalhes": d}
+                for d in decisoes])
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+
+    def salvar_equivalencias(self, achados):
+        if not achados:
+            return
+        try:
+            self._req("POST", "produtos_equivalentes", params={"on_conflict": "produto_a,produto_b"},
+                      prefer="return=minimal,resolution=merge-duplicates", corpo=achados)
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+
+    def experimento_ativo(self):
+        try:
+            linhas = self._get("experimentos", select="id,nome,tipo,amostra_minima,inicio_em", ativo="is.true", limit="1")
+        except ErroBanco as e:
+            if self._sem_019(e):
+                return None
+            raise
+        return linhas[0] if linhas else None
+
+    def salvar_resultado_experimento(self, experimento_id, resultado):
+        self._req("PATCH", "experimentos", params={"id": f"eq.{experimento_id}"}, prefer="return=minimal",
+                  corpo={"resultado": resultado, "resultado_em": iso(agora())})
+
+    # ---------------------------------------------------------------- expansão modular (020)
+    def salvar_configuracao(self, chave, valor):
+        self._req("PATCH", "configuracoes", params={"chave": f"eq.{chave}"}, prefer="return=minimal", corpo={"valor": valor})
+
+    def canais_categorias(self):
+        saida: dict[int, list[int]] = {}
+        try:
+            for l in self._get("canais_categorias", select="canal_id,categoria_id"):
+                saida.setdefault(l["canal_id"], []).append(l["categoria_id"])
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+        return saida
+
+    def ultimo_agendado(self, canal_id):
+        v = self._rpc("ultimo_agendado", p_canal=canal_id)
+        return datetime.fromisoformat(v.replace("Z", "+00:00")) if isinstance(v, str) else None
+
+    def tarefa_enfileirar(self, tipo, payload, chave=None, agendar_para=None):
+        return self._rpc("tarefa_enfileirar", p_tipo=tipo, p_payload=payload, p_chave=chave,
+                         p_agendar_para=iso(agendar_para or agora()))
+
+    def tarefas_pegar(self, tipos, limite, bloqueio_min, worker):
+        return self._rpc("tarefas_pegar", p_tipos=list(tipos), p_limite=limite, p_bloqueio_min=bloqueio_min, p_worker=worker) or []
+
+    def tarefa_concluir(self, tarefa_id, ok, erro, resultado, worker):
+        return self._rpc("tarefa_concluir", p_id=tarefa_id, p_ok=ok, p_erro=erro, p_resultado=resultado, p_worker=worker) is True
+
+    def ofertas_vitrine(self, dias=7):
+        return [dict(l, preco=float(l["preco"]), preco_referencia=float(l["preco_referencia"]) if l.get("preco_referencia") else None,
+                     desconto_pct=float(l["desconto_pct"]) if l.get("desconto_pct") is not None else None)
+                for l in self._rpc("ofertas_vitrine", p_dias=dias) or []]
+
+    def cupons_vitrine(self):
+        return [{"titulo": c["titulo"], "codigo": c.get("codigo"), "condicoes": c.get("regras"),
+                 "fim_em": (c.get("fim_em") or "")[:10], "marketplace_nome": c.get("marketplace_nome")}
+                for c in self._rpc("cupons_vitrine") or []]
+
+    def ofertas_publicadas_desde(self, desde):
+        return self._rpc("ofertas_publicadas_desde", p_desde=iso(desde)) or []
+
+    def criar_alerta(self, chat_id, termo, preco_maximo):
+        self._req("POST", "alertas_preco", prefer="return=minimal",
+                  corpo={"telegram_chat_id": chat_id, "termo": termo, "preco_maximo": preco_maximo})
+
+    def alertas_da_pessoa(self, chat_id):
+        return self._get("alertas_preco", select="id,termo,preco_maximo", telegram_chat_id=f"eq.{chat_id}",
+                         ativo="is.true", order="id.asc")
+
+    def apagar_alerta(self, alerta_id):
+        self._req("DELETE", "alertas_preco", params={"id": f"eq.{alerta_id}"}, prefer="return=minimal")
+
+    def alertas_apagar_tudo(self, chat_id):
+        self._req("DELETE", "alertas_preco", params={"telegram_chat_id": f"eq.{chat_id}"}, prefer="return=minimal")
+
+    def alertas_ativos(self):
+        return self._get("alertas_preco", select="id,telegram_chat_id,termo,preco_maximo", ativo="is.true", limit="10000")
+
+    def registrar_aviso(self, alerta_id, promocao_id):
+        try:
+            self._req("POST", "alertas_avisos", prefer="return=minimal", corpo={"alerta_id": alerta_id, "promocao_id": promocao_id})
+            return True
+        except ErroBanco as e:
+            if e.codigo == "23505":
+                return False
+            raise
+
+    def avisos_hoje_por_pessoa(self):
+        return {int(l["telegram_chat_id"]): int(l["avisos"]) for l in self._rpc("alertas_avisos_hoje") or []}
+
+    def whatsapp_destinatarios(self, categoria_id, max_dia, promocao_id):
+        return self._rpc("whatsapp_destinatarios", p_categoria=categoria_id, p_max_dia=max_dia, p_promocao=promocao_id) or []
+
+    def whatsapp_reservar(self, inscrito_id, promocao_id):
+        return self._rpc("whatsapp_reservar", p_inscrito=inscrito_id, p_promocao=promocao_id) is True
+
+    def whatsapp_gasto_hoje(self):
+        return float(self._rpc("whatsapp_gasto_hoje") or 0)
+
+    def whatsapp_reservar_envio(self, inscrito_id, promocao_id, custo, teto, max_dia):
+        return str(self._rpc("whatsapp_reservar_envio", p_inscrito=inscrito_id, p_promocao=promocao_id, p_custo=custo,
+                             p_teto=teto, p_max_dia=max_dia))
+
+    def orcamento_reservar(self, servico, valor, teto):
+        return self._rpc("orcamento_reservar", p_servico=servico, p_valor=valor, p_teto=teto) is True
+
+    def orcamento_estornar(self, servico, valor):
+        self._rpc("orcamento_estornar", p_servico=servico, p_valor=valor)
+
+    def orcamento_situacao(self, servico):
+        r = self._rpc("orcamento_situacao", p_servico=servico) or [{}]
+        r = r[0] if isinstance(r, list) else r
+        return {"gasto_usd": float(r.get("gasto_usd") or 0), "teto_usd": float(r.get("teto_usd") or 0),
+                "pct": float(r.get("pct") or 0), "alertar": bool(r.get("alertar"))}
+
+    def tarefa_renovar(self, tarefa_id, worker, bloqueio_min):
+        return self._rpc("tarefa_renovar", p_id=tarefa_id, p_worker=worker, p_bloqueio_min=bloqueio_min) is True
+
+    def fila_saude(self):
+        r = self._rpc("fila_saude") or [{}]
+        return r[0] if isinstance(r, list) else r
+
+    def taxas_cancelamento(self, dias=180):
+        """Comissões DECIDIDAS (confirmada, paga ou cancelada) por loja, para a comissão líquida."""
+        desde = (agora() - timedelta(days=dias)).date().isoformat()
+        linhas = self._get("comissoes", select="status,marketplaces!inner(codigo)", data_venda=f"gte.{desde}",
+                           origem="neq.demo", status="in.(confirmada,paga,cancelada)", limit="20000")
+        return _agrupar_cancelamentos([((l.get("marketplaces") or {}).get("codigo"), l["status"]) for l in linhas])
+
+    def whatsapp_evento(self, inscrito_id, tipo, custo, detalhe):
+        self._req("POST", "whatsapp_eventos", prefer="return=minimal",
+                  corpo={"inscrito_id": inscrito_id, "tipo": tipo, "custo_usd": custo, "detalhe": (detalhe or "")[:300] or None})
+
+    def whatsapp_inscrever(self, telefone, origem, texto, categorias=None):
+        return self._rpc("whatsapp_inscrever", p_telefone=telefone, p_origem=origem, p_texto=texto, p_categorias=categorias or [])
+
+    def whatsapp_descadastrar(self, telefone):
+        return self._rpc("whatsapp_descadastrar", p_telefone=telefone) is True
+
+    def salvar_resumo_inteligencia(self, tipo, dados):
+        try:
+            self._req("POST", "inteligencia_resumos", params={"on_conflict": "tipo"},
+                      prefer="return=minimal,resolution=merge-duplicates",
+                      corpo={"tipo": tipo, "dados": dados, "calculado_em": iso(agora())})
+        except ErroBanco as e:
+            if not self._sem_019(e):
+                raise
+
+    def registrar_importacao(self, dados):
+        try:
+            self._req("POST", "comissoes_importacoes", corpo=dados, prefer="return=minimal")
+        except ErroBanco as e:
+            if e.codigo not in ("42P01", "PGRST205"):
+                raise  # tabela ausente (migration 017 não aplicada): segue sem o registro
+
+    def ultima_importacao(self, marketplace_id, tipo):
+        try:
+            linhas = self._get("comissoes_importacoes", select="criado_em", marketplace_id=f"eq.{marketplace_id}",
+                               tipo=f"eq.{tipo}", status="neq.erro", order="criado_em.desc", limit="1")
+        except ErroBanco as e:
+            if e.codigo in ("42P01", "PGRST205"):
+                return None
+            raise
+        return datetime.fromisoformat(linhas[0]["criado_em"].replace("Z", "+00:00")) if linhas else None
 
     def iniciar_execucao(self, origem, modo, versao):
         linhas = self._req("POST", "execucoes", params={"select": "id"}, prefer="return=representation",
@@ -538,3 +974,23 @@ class SupabaseRepositorio(Repositorio):
             return self._rpc("obter_credencial", p_integracao=integracao, p_nome=nome)
         except ErroBanco:
             return None
+
+
+def dados_de_ranking(l: dict) -> dict:
+    """Converte a linha de promoção (com produto, loja, categoria e análise) no formato do ranking."""
+    from .inteligencia.aprendizado import faixa_de_preco
+    prod = l.get("produtos") or {}
+    mkt = prod.get("marketplaces") or {}
+    analise = l.get("analise") or {}
+    preco = float(l["preco_promocional"]) if l.get("preco_promocional") is not None else None
+    return {
+        "promocao_id": l["id"], "produto_id": l["produto_id"], "marketplace": mkt.get("codigo"),
+        "titulo": prod.get("titulo"), "preco": preco,
+        "comissao_pct": float(l["comissao_pct"]) if l.get("comissao_pct") is not None else None,
+        "dados_confiaveis": mkt.get("modo") == "real" and l.get("origem") == "automatica" and not l.get("demo"),
+        "pontuacao": l.get("pontuacao"), "classificacao": l.get("classificacao"),
+        "desconto_real": analise.get("desconto_real"), "desconto_comprovado": bool(analise.get("desconto_comprovado")),
+        "categoria": (prod.get("categorias") or {}).get("nome"), "faixa_preco": faixa_de_preco(preco),
+        "marca": prod.get("marca"), "gtin": prod.get("gtin"), "modelo": prod.get("modelo"),
+        "loja_oficial": prod.get("loja_oficial"), "estoque": prod.get("estoque"), "origem": l.get("origem"),
+    }
