@@ -39,7 +39,7 @@ def headline(d: dict, cfg: dict) -> str:
 def legenda_telegram(d: dict, link: str, cfg: dict, variante: str = "A") -> str:
     """Formato Sonho das Promos: chamada, produto, desconto, de/por, link e aviso de preço/estoque.
     Variante B (teste A/B "preço primeiro"): a linha do preço vem antes da chamada.
-    "De" e "% de desconto" só aparecem com desconto comprovado; #publi e o aviso de comissão ficam no fim."""
+    "De" e "% de desconto" só aparecem com desconto comprovado; o #publi fica no fim."""
     linhas = []
     if d.get("demo"):
         linhas += ["🧪 <b>[DEMONSTRAÇÃO — não é uma oferta real]</b>", ""]
@@ -59,14 +59,8 @@ def legenda_telegram(d: dict, link: str, cfg: dict, variante: str = "A") -> str:
         linhas.append(f"🎟 Com o cupom <code>{html.escape(d['cupom_codigo'])}</code>: <b>{reais(d['preco_com_cupom'])}</b>")
     linhas += ["", "🛒 <b>Compre aqui:</b>", html.escape(link), "",
                "⚠️ <b>Promoção sujeita à alteração de preço e estoque do site</b>"]
-    rodape = []
-    if cfg.get("transparencia.marcar_publi", True):
-        rodape.append("#publi")
-    aviso = cfg.get("transparencia.aviso_afiliado")
-    if aviso:
-        rodape.append(html.escape(aviso))
-    if rodape:
-        linhas += ["", f"<i>{' · '.join(rodape)}</i>"]
+    if cfg.get("transparencia.marcar_publi", True):  # no Telegram, só o #publi (a dona pediu sem o aviso de comissão)
+        linhas += ["", "<i>#publi</i>"]
     return "\n".join(linhas)[:1024]
 
 
@@ -123,9 +117,6 @@ def legenda_cupom_telegram(c, cfg: dict) -> str:
         linhas.append(f"ℹ️ {html.escape(c.regras)}")
     if c.link_afiliado:
         linhas += ["", f"🛒 Aproveite aqui: {html.escape(c.link_afiliado)}"]
-    aviso = cfg.get("transparencia.aviso_afiliado")
-    if aviso:
-        linhas += ["", f"<i>{html.escape(aviso)}</i>"]
     return "\n".join(linhas)[:1024]
 
 

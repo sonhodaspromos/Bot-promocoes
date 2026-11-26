@@ -67,7 +67,7 @@ def test_legenda_telegram_no_formato_da_marca():
     assert "😱🔻 <b>55% DE DESCONTO</b>" in t and "De: <s>R$ 199,90</s>" in t and "💥 <b>Por: R$ 89,90</b>" in t
     assert "🛒 <b>Compre aqui:</b>\nhttps://s.shopee.com.br/x" in t
     assert "⚠️ <b>Promoção sujeita à alteração de preço e estoque do site</b>" in t
-    assert linhas[-1] == "<i>#publi · Posso ganhar comissão.</i>"
+    assert linhas[-1] == "<i>#publi</i>" and "comissão" not in t  # só o #publi, sem o aviso de comissão
 
 
 def test_legenda_sem_desconto_comprovado_nao_mostra_de_nem_porcentagem():

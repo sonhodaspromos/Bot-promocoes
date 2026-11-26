@@ -309,6 +309,6 @@ def test_arte_gera_jpeg_nos_dois_formatos():
 def test_textos_identificam_publicidade_demo_e_escapam_html():
     cfg = MemoriaRepositorio().configuracoes()
     t = textos.legenda_telegram(DADOS, "https://x/r?l=1", cfg)
-    assert "&lt;b&gt;Bluetooth" in t and "#publi" in t and "DEMONSTRAÇÃO" in t and "comissão" in t
+    assert "&lt;b&gt;Bluetooth" in t and "#publi" in t and "DEMONSTRAÇÃO" in t
     ig = textos.legenda_instagram({**DADOS, "demo": False}, cfg, destaque=True)
     assert "IMPERDÍVEL" in ig and "#publi" in ig and "DEMONSTRAÇÃO" not in ig
