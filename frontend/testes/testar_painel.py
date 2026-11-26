@@ -244,6 +244,10 @@ async def main():
         await pg.screenshot(path=CAPTURAS / "0_mfa_cadastro.png")
         checar(not erros, f"sem erros de JavaScript no 2º fator ({erros})")
         await pg.close()
+        pg, erros = await pagina("papel=dono&aal=aal1&fator=pendente")
+        checar(await pg.locator("#mfa-qr").count() == 1 and "already exists" not in await pg.inner_text("body"),
+               "cadastro anterior não concluído é limpo e o QR code aparece (sem 'already exists')")
+        await pg.close()
         pg, erros = await pagina("papel=nenhum")
         checar(await pg.locator("text=Sem acesso").count() == 1 and not await pg.is_visible("#nav"), "conta sem papel vê 'Sem acesso'")
         await pg.close()
