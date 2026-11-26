@@ -93,8 +93,13 @@ export function extrairProduto(html: string, urlFinal = ""): DadosProduto {
   let imagem = imagemTxt || meta(html, "og:image");
   if (imagem && !/^https:\/\//i.test(imagem)) imagem = null;
 
+  // preço atual, do mais confiável para o menos: dados estruturados → metatags → texto de acessibilidade
+  // "Agora: 276 reais com 44 centavos" → "R$ 276,44" no fim do título (o Mercado Livre põe o preço no og:title)
+  const precoTitulo = (titulo ?? "").match(/[-–|]\s*R\$\s*([\d.]+(?:,\d{1,2})?)\s*$/)?.[1];
+  const agora = html.match(/aria-label=["']Agora[:\s]+([^"']+)["']/i)?.[1];
   const preco = numeroPreco(oferta?.price ?? oferta?.lowPrice) ?? numeroPreco(meta(html, "product:price:amount"))
-    ?? numeroPreco(meta(html, "price"));
+    ?? numeroPreco(meta(html, "price")) ?? (agora ? precoPorExtenso(decodificar(agora)) : null)
+    ?? numeroPreco(precoTitulo);
 
   let antigo: number | null = null;
   const riscado = html.match(/aria-label=["'](?:Antes|Antes de|De)[:\s]+([^"']+)["']/i)?.[1];
@@ -106,7 +111,7 @@ export function extrairProduto(html: string, urlFinal = ""): DadosProduto {
     || (urlFinal + " " + html.slice(0, 200000)).match(/\bMLB-?\d{6,}\b/)?.[0]?.replace("-", "") || null;
 
   return {
-    titulo: titulo ? titulo.replace(/\s*\|\s*Mercado Livre.*$/i, "").slice(0, 300) : null,
+    titulo: titulo ? titulo.replace(/\s*\|\s*Mercado Livre.*$/i, "").replace(/\s*[-–|]\s*R\$\s*[\d.]+(?:,\d{1,2})?\s*$/, "").slice(0, 300) : null,
     imagem_url: imagem,
     preco,
     preco_antigo: antigo,

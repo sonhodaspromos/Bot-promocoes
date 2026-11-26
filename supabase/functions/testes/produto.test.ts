@@ -54,3 +54,23 @@ test("reconhece página de verificação/robô", () => {
   assert.ok(paginaDeBloqueio("<html>Verifique que você não é um robô captcha</html>"));
   assert.equal(paginaDeBloqueio(PAGINA_ML), false);
 });
+
+test("Mercado Livre sem preço estruturado: usa o preço do fim do título e limpa o título", () => {
+  const html = `<meta property="og:title" content="Tênis Jump Hook adidas Branco Liso 35 Br - R$ 276,44">
+    <meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_638350-O.webp">
+    <s aria-label="Antes: 349 reais com 99 centavos">R$ 349,99</s>`;
+  const d = extrairProduto(html, "https://www.mercadolivre.com.br/p/MLB4657663257");
+  assert.equal(d.titulo, "Tênis Jump Hook adidas Branco Liso 35 Br");
+  assert.equal(d.preco, 276.44);
+  assert.equal(d.preco_antigo, 349.99);
+  assert.equal(d.id_externo, "MLB4657663257");
+});
+
+test("preço atual pelo texto de acessibilidade 'Agora:'", () => {
+  const html = `<meta property="og:title" content="Fone"><span aria-label="Agora: 1.276 reais com 4 centavos"></span>`;
+  assert.equal(extrairProduto(html).preco, 1276.04);
+});
+
+test("preço no título com milhar", () => {
+  assert.equal(extrairProduto(`<meta property="og:title" content="TV 50 - R$ 2.199,90">`).preco, 2199.9);
+});
