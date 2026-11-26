@@ -4,7 +4,8 @@ const params = new URLSearchParams(location.search);
 const PAPEL = params.get("papel") || "dono";
 const LOGADO = params.get("logado") !== "0";
 const AAL = params.get("aal") || "aal2";          // aal1 = entrou só com senha (falta o 2º fator)
-const FATOR = params.get("fator") || "verificado"; // verificado | nenhum
+const FATOR = params.get("fator") || "verificado"; // verificado | nenhum | pendente (cadastro anterior não concluído)
+let pendentes = FATOR === "pendente" ? [{ id: "f0", factor_type: "totp", status: "unverified", friendly_name: "Painel do bot" }] : [];
 let aalAtual = AAL;
 const agora = new Date().toISOString();
 const hoje = new Date().toLocaleDateString("sv-SE");
@@ -147,9 +148,18 @@ export function createClient() {
       signOut: async () => ({}),
       refreshSession: async () => ({ data: {}, error: null }),
       mfa: {
-        listFactors: async () => ({ data: { totp: FATOR === "verificado" ? [{ id: "f1", status: "verified" }] : [] } }),
-        unenroll: async () => ({ error: null }),
-        enroll: async () => { window.__chamadas.push({ mfa: "enroll" }); return { data: { id: "f2", totp: { qr_code: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E", secret: "JBSWY3DPEHPK3PXP" } }, error: null }; },
+        // como o supabase-js: "totp" só traz os verificados; os pendentes aparecem só em "all"
+        listFactors: async () => {
+          const ver = FATOR === "verificado" ? [{ id: "f1", factor_type: "totp", status: "verified" }] : [];
+          return { data: { totp: ver, all: [...ver, ...pendentes] } };
+        },
+        unenroll: async ({ factorId }) => { pendentes = pendentes.filter((f) => f.id !== factorId); return { error: null }; },
+        enroll: async ({ friendlyName }) => {
+          window.__chamadas.push({ mfa: "enroll" });
+          if (pendentes.some((f) => f.friendly_name === friendlyName))
+            return { data: null, error: { message: `A factor with the friendly name "${friendlyName}" for this user already exists` } };
+          return { data: { id: "f2", totp: { qr_code: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E", secret: "JBSWY3DPEHPK3PXP" } }, error: null };
+        },
         challengeAndVerify: async ({ code }) => {
           window.__chamadas.push({ mfa: "verify", code });
           if (code !== "123456") return { error: { message: "Invalid TOTP code" } };

@@ -64,8 +64,13 @@ export async function telaMfa(el, aoConfirmar) {
   let fatorId = verificado?.id, qr = "", segredo = "";
   if (!fatorId) {
     // limpa tentativas antigas não concluídas antes de criar uma nova
-    for (const f of (fatores?.totp || []).filter((f) => f.status !== "verified")) await sb.auth.mfa.unenroll({ factorId: f.id });
-    const { data, error } = await sb.auth.mfa.enroll({ factorType: "totp", friendlyName: "Painel do bot" });
+    // (fatores.totp só traz os VERIFICADOS; os pendentes ficam em fatores.all)
+    for (const f of (fatores?.all || []).filter((f) => f.factor_type === "totp" && f.status !== "verified")) {
+      await sb.auth.mfa.unenroll({ factorId: f.id });
+    }
+    // nome único: se ainda sobrar um pendente com o mesmo nome, o cadastro não trava
+    const nome = `Painel do bot ${new Date().toLocaleDateString("pt-BR")} ${Date.now().toString(36).slice(-4)}`;
+    const { data, error } = await sb.auth.mfa.enroll({ factorType: "totp", friendlyName: nome });
     if (error) {
       el.innerHTML = `<section class="login"><div class="card"><h2>2º fator</h2><p>Não foi possível iniciar o cadastro do app autenticador:
         ${esc(mensagemErro(error))}</p><p class="muted">Verifique se o MFA (TOTP) está habilitado em Supabase → Authentication.</p></div></section>`;
