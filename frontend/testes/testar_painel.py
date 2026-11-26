@@ -169,6 +169,19 @@ async def main():
                "story manual: copia o link rastreado do story")
         await pg.click('.janela-story [data-x="fechar"]'); await pg.wait_for_timeout(200)
         checar(await pg.locator(".janela-story").count() == 0, "story manual: fecha a janela")
+        # ---- republicar
+        await pg.click('#f-status .chip[data-s="publicada"]'); await pg.wait_for_timeout(400)
+        checar(await pg.locator('[data-acao="republicar"][data-id="14"]').count() == 1, "republicar: botão aparece na oferta publicada")
+        await pg.click('[data-acao="republicar"][data-id="14"]')
+        await pg.wait_for_selector("#rp-preco", timeout=8000)
+        checar(await pg.input_value("#rp-preco") == "241,00" and await pg.input_value("#rp-antigo") == "419,90" and await pg.is_checked("#rp-pix"),
+               "republicar: confere o preço na página e preenche preço, antigo e Pix")
+        await pg.click('.janela-story [data-x="republicar"]'); await pg.wait_for_timeout(400)
+        rp = [c for c in await pg.evaluate("window.__chamadas") if c.get("rpc") == "republicar_oferta"]
+        checar(rp and rp[-1]["args"] == {"p_promocao": 14, "p_preco": 241, "p_preco_antigo": 419.9,
+                                         "p_referencia_da_pagina": True, "p_preco_pix": True},
+               "republicar: envia o preço conferido (antigo marcado como da página)")
+        checar("de volta na fila" in await pg.inner_text("#toast"), "republicar: avisa que voltou para a fila")
         await pg.click('#f-status .chip[data-s="encontrada"]'); await pg.wait_for_timeout(400)
         await pg.click('[data-acao="aprovar"] >> nth=0'); await pg.wait_for_timeout(300)
         chamadas = await pg.evaluate("window.__chamadas")

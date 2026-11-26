@@ -443,6 +443,30 @@ class MemoriaRepositorio(Repositorio):
                           "link_url": link["url"] if link else None})
         return saida[:limite]
 
+    def aprovadas_para_conferir(self, limite):
+        saida = []
+        for pr in self.t["promocoes"]:
+            if pr["status"] != "aprovada":
+                continue
+            prod = self._um("produtos", id=pr["produto_id"])
+            mkt = self._um("marketplaces", id=prod["marketplace_id"])
+            link = next((l for l in self.t["links"] if l["produto_id"] == prod["id"] and l["ativo"]), None)
+            saida.append({"promocao_id": pr["id"], "produto_id": prod["id"], "preco_promocional": pr["preco_promocional"],
+                          "id_externo": prod["id_externo"], "marketplace": mkt["codigo"],
+                          "dominios": mkt["dominios_afiliado"], "dominios_destino": mkt.get("dominios_destino") or [],
+                          "verificado_em": prod.get("verificado_em"), "link_id": link["id"] if link else None,
+                          "link_url": link["url"] if link else None})
+        saida.sort(key=lambda x: (x["verificado_em"] is not None, x["verificado_em"] or 0))
+        return saida[:limite]
+
+    def sincronizar_oferta_na_fila(self, promocao_id, preco, preco_antigo, pix):
+        pr = self._um("promocoes", id=promocao_id)
+        if not pr or pr["status"] != "aprovada":
+            return
+        antigo = round(preco_antigo, 2) if preco_antigo and preco_antigo > preco else None
+        pr.update(preco_promocional=round(preco, 2), preco_referencia=antigo,
+                  referencia_origem="pagina" if antigo else None, preco_no_pix=bool(pix))
+
     def atualizar_produto(self, produto_id, preco, disponivel, preco_original):
         p = self._um("produtos", id=produto_id)
         antes_preco, antes_disp = p["preco_atual"], p["disponivel"]

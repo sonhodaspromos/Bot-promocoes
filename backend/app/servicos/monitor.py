@@ -71,7 +71,49 @@ class ServicoMonitor:
                 self.log.aviso("monitor", "Loja fora do ar agora; confiro depois", erro=str(e))
             except (ErroIntegracao, ErroBanco) as e:
                 self.log.erro("monitor", "Falha ao conferir oferta", promocao_id=it["promocao_id"], erro=str(e))
+        if cfg.get("monitor.conferir_fila", True) and cfg.get("monitor.ler_preco_pagina", True):
+            verificadas += self._conferir_fila(cfg, limite)
         return verificadas
+
+    def _conferir_fila(self, cfg: dict, limite: int) -> int:
+        """Ofertas na FILA (ainda não publicadas) de lojas sem API: lê a página a cada monitor.intervalo_pagina_horas.
+        Preço subiu além da tolerância ou esgotou → o banco pausa; senão a oferta passa a ter o preço de agora
+        (nada foi divulgado com o preço antigo). Assim o post nunca sai com preço velho."""
+        horas = float(cfg.get("monitor.intervalo_pagina_horas") or 6)
+        feitas = 0
+        try:
+            itens = self.repo.aprovadas_para_conferir(limite)
+        except (ErroBanco, NotImplementedError):
+            return 0
+        for it in itens:
+            if it["marketplace"] not in LER_PAGINA or not it.get("link_url"):
+                continue
+            if _recente(it.get("verificado_em"), horas, self.relogio()):
+                continue
+            try:
+                dominios = list(it.get("dominios") or []) + list(it.get("dominios_destino") or [])
+                d = ler_pagina(self.http, it["link_url"], dominios, resolver=self.resolver)
+                if d.get("quebrado"):
+                    if it.get("link_id"):
+                        self.repo.invalidar_link(it["link_id"], d["erro"])
+                    self.log.info("monitor", f"Fila: link invalidado ({d['erro']})", promocao_id=it["promocao_id"])
+                elif not d.get("preco"):
+                    self.log.aviso("monitor", f"Fila: não deu para ler o preço da página ({d.get('erro')})",
+                                   promocao_id=it["promocao_id"])
+                    continue
+                else:
+                    self.repo.atualizar_produto(it["produto_id"], d["preco"], d["disponivel"], d.get("preco_antigo"))
+                    self.repo.sincronizar_oferta_na_fila(it["promocao_id"], d["preco"], d.get("preco_antigo"),
+                                                         d.get("preco_pix", False))
+                    if abs(d["preco"] - float(it["preco_promocional"])) >= 0.01:
+                        self.log.info("monitor", f"Fila: preço atualizado de R$ {float(it['preco_promocional']):.2f} "
+                                                 f"para R$ {d['preco']:.2f}", promocao_id=it["promocao_id"])
+                feitas += 1
+            except LinkTemporariamenteIndisponivel as e:
+                self.log.aviso("monitor", "Loja fora do ar agora; confiro depois", erro=str(e))
+            except (ErroIntegracao, ErroBanco) as e:
+                self.log.erro("monitor", "Falha ao conferir oferta da fila", promocao_id=it["promocao_id"], erro=str(e))
+        return feitas
 
     def _conferir_pagina(self, it: dict, cfg: dict) -> bool:
         """True = resolvido pela leitura da página (atualizou o preço ou invalidou o link).

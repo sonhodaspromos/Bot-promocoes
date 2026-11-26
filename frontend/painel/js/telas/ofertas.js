@@ -1,6 +1,6 @@
 // Ofertas: filtrar, aprovar, rejeitar, pausar e reativar.
-import { q } from "../api.js";
-import { $, $$, ROTULO_STATUS, aviso, brl, dataHora, esc, urlSegura } from "../ui.js";
+import { puxarDados, q } from "../api.js";
+import { $, $$, ROTULO_STATUS, aviso, brl, dataHora, esc, numero, urlSegura } from "../ui.js";
 import { desenharStory, janelaStory, linkDoStory, melhorCupom } from "../story.js";
 
 const POR_PAGINA = 30;
@@ -47,6 +47,7 @@ export async function montar(el, ctx) {
   $("#lista", el).addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-acao]");
     if (b?.dataset.acao === "story") abrirStory(ctx, itensCarregados.get(String(b.dataset.id)));
+    else if (b?.dataset.acao === "republicar") abrirRepublicar(el, ctx, itensCarregados.get(String(b.dataset.id)));
     else if (b) acao(el, ctx, b.dataset.id, b.dataset.acao);
   });
   await carregar(el, ctx, true);
@@ -99,6 +100,7 @@ function cartao(o, ctx) {
       ${explicacao(o)}
       <div class="acoes">${acoes.map(([a, t, c]) => `<button class="b ${c}" data-acao="${a}" data-id="${o.id}">${t}</button>`).join("")}
         ${["aprovada", "publicada"].includes(o.status) && o.link_url ? `<button class="b p" data-acao="story" data-id="${o.id}">📲 Story</button>` : ""}
+        ${ctx.podeEditar && ["publicada", "pausada", "expirada"].includes(o.status) && o.link_url ? `<button class="b" data-acao="republicar" data-id="${o.id}">🔁 Republicar</button>` : ""}
         ${o.link_url ? `<a class="b" href="${esc(urlSegura(o.link_url))}" target="_blank" rel="noopener noreferrer">Abrir link</a>` : ""}</div>
     </div></div>`;
 }
@@ -187,5 +189,49 @@ function abrirStory(ctx, o) {
     nome: `story-${o.id}.jpg`,
     link: linkDoStory(o),
     nota: o.link_validado ? "" : "Este link ainda não foi conferido pelo bot; os cliques do story não entram nas estatísticas.",
+  });
+}
+
+// ---- republicar: confere o preço atual na página da loja e devolve a oferta para a fila (sem cadastrar de novo)
+async function abrirRepublicar(el, ctx, o) {
+  if (!o) return;
+  const janela = document.createElement("div");
+  janela.className = "janela-story";
+  janela.setAttribute("role", "dialog"); janela.setAttribute("aria-modal", "true"); janela.setAttribute("aria-label", "Republicar oferta");
+  janela.innerHTML = '<div class="caixa"><p class="muted centro">Conferindo o preço na loja…</p></div>';
+  document.body.appendChild(janela);
+  const fechar = () => janela.remove();
+  janela.addEventListener("click", (e) => { if (e.target === janela) fechar(); });
+  const moeda = (v) => (v ? Number(v).toFixed(2).replace(".", ",") : "");
+  let d = null, falha = "";
+  if (o.marketplace !== "shopee") {
+    try { d = await puxarDados(o.link_url, o.marketplace); } catch (e) { falha = e.message; }
+  } else falha = "Na Shopee a conferência automática depende da API; confira o preço na loja.";
+  const antigoPagina = d?.preco_antigo ? Number(d.preco_antigo) : null;
+  janela.innerHTML = `<div class="caixa">
+    <b>${esc(o.titulo)}</b>
+    <p class="m">${d?.preco ? "Preço lido agora na página da loja. Confira antes de republicar." : `Não consegui ler o preço: ${esc(falha || "preço não encontrado")}. Confira na loja e preencha.`}</p>
+    <div class="linha">
+      <div><label for="rp-preco">Preço atual (R$)</label><input id="rp-preco" inputmode="decimal" value="${moeda(d?.preco || "")}"></div>
+      <div><label for="rp-antigo">Preço antigo (opcional)</label><input id="rp-antigo" inputmode="decimal" value="${moeda(d?.preco_antigo || "")}"></div>
+    </div>
+    <label class="sw" style="color:var(--tx)"><span>Esse preço é no Pix</span>
+      <span class="tg"><input type="checkbox" id="rp-pix" ${d?.preco_pix ? "checked" : ""}><span></span></span></label>
+    <p class="m">Antes: ${brl(o.preco_promocional)}. A oferta volta para a fila e passa pela análise e pelas conferências de novo.</p>
+    <button class="b p grande" data-x="republicar">🔁 Republicar</button>
+    <button class="b grande" data-x="fechar">Cancelar</button></div>`;
+  janela.addEventListener("click", async (e) => {
+    const x = e.target.closest("[data-x]")?.dataset.x;
+    if (x === "fechar") return fechar();
+    if (x !== "republicar") return;
+    const preco = numero($("#rp-preco", janela).value), antigo = numero($("#rp-antigo", janela).value);
+    if (!preco || preco <= 0) return aviso("Informe o preço atual.", "erro");
+    try {
+      await q(ctx.sb.rpc("republicar_oferta", { p_promocao: o.id, p_preco: preco, p_preco_antigo: antigo,
+        p_referencia_da_pagina: antigoPagina !== null && antigo === antigoPagina, p_preco_pix: $("#rp-pix", janela).checked }));
+      fechar();
+      aviso("Oferta de volta na fila ✔ sai na próxima rodada");
+      carregar(el, ctx, true);
+    } catch (err) { aviso(err.message, "erro"); }
   });
 }
