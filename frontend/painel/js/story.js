@@ -146,27 +146,28 @@ function descontoGrande(c) {
   return "CUPOM";
 }
 
-/** Story do cupom no fundo da marca: loja, desconto grande, condições (nunca cortadas), código, validade e regras. */
+/** Story do cupom no fundo de cupons da marca (img/story_cupom_fundo.png): loja, desconto grande, condições (nunca cortadas), código, validade e regras. */
 export async function desenharStoryCupom(c, cores = {}) {
   const principal = cores.principal || "#DC1B63", realce = cores.destaque || "#FDC302";
   await carregarFontes();
-  const fundo = await imagem(new URL("../img/story_fundo.png", import.meta.url).href, false);
+  const fundo = await imagem(new URL("../img/story_cupom_fundo.png", import.meta.url).href, false);  // fundo só com o padrão do @ (sem faixa)
   const cv = document.createElement("canvas");
   cv.width = L; cv.height = A;
   const x = cv.getContext("2d");
   if (fundo) x.drawImage(fundo, 0, 0, L, A); else { x.fillStyle = principal; x.fillRect(0, 0, L, A); }
-  const y0 = 90, y1 = Math.round(A * 0.70), area = L - 4 * M;
-  retangulo(x, M, y0, L - M, y1, 40); x.fillStyle = "#fff"; x.fill();
-  x.lineWidth = 6; x.strokeStyle = principal; x.stroke();
+  const area = L - 4 * M;
+  let y0 = 170, y1 = A - 170;  // ajustados à altura do conteúdo mais abaixo (cartão centralizado no fundo)
 
-  let cx = M + 20;
-  for (const [t, cor] of [...(c.demo ? [["DEMONSTRAÇÃO", "#6B21A8"]] : []), ["PUBLI", "#222222"]]) {
-    x.font = "700 26px PoppinsArte, system-ui, sans-serif";
-    const w = x.measureText(t).width + 30;
-    retangulo(x, cx, y0 + 20, cx + w, y0 + 62, 20); x.fillStyle = cor; x.fill();
-    x.fillStyle = "#fff"; x.textAlign = "left"; x.textBaseline = "middle"; x.fillText(t, cx + 15, y0 + 41);
-    cx += w + 10;
-  }
+  const selos = (y0) => {
+    let cx = M + 20;
+    for (const [t, cor] of [...(c.demo ? [["DEMONSTRAÇÃO", "#6B21A8"]] : []), ["PUBLI", "#222222"]]) {
+      x.font = "700 26px PoppinsArte, system-ui, sans-serif";
+      const w = x.measureText(t).width + 30;
+      retangulo(x, cx, y0 + 20, cx + w, y0 + 62, 20); x.fillStyle = cor; x.fill();
+      x.fillStyle = "#fff"; x.textAlign = "left"; x.textBaseline = "middle"; x.fillText(t, cx + 15, y0 + 41);
+      cx += w + 10;
+    }
+  };
 
   // conteúdo centralizado na altura do cartão: 1ª passada mede (num canvas de rascunho), 2ª desenha
   const conteudo = (x, y) => {
@@ -209,8 +210,12 @@ export async function desenharStoryCupom(c, cores = {}) {
   };
   const rascunho = document.createElement("canvas").getContext("2d");
   const altura = conteudo(rascunho, 0);
-  const topo = y0 + 80, livre = y1 - 30 - topo;
-  conteudo(x, topo + Math.max(0, (livre - altura) / 2));
+  const alturaCartao = Math.min(A - 340, Math.max(1000, altura + 220));
+  y0 = Math.round((A - alturaCartao) / 2); y1 = y0 + alturaCartao;
+  retangulo(x, M, y0, L - M, y1, 40); x.fillStyle = "#fff"; x.fill();
+  x.lineWidth = 6; x.strokeStyle = principal; x.stroke();
+  selos(y0);
+  conteudo(x, y0 + 80 + Math.max(0, (alturaCartao - 110 - altura) / 2));
   return { canvas: cv, semFoto: false };
 }
 

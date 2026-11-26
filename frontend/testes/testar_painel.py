@@ -88,9 +88,11 @@ async def main():
         await pg.wait_for_selector(".janela-story img", timeout=8000); await pg.wait_for_timeout(300)
         info = await pg.evaluate("""() => { const i = document.querySelector('.janela-story img'); const c = document.createElement('canvas');
             c.width = i.naturalWidth; c.height = i.naturalHeight; c.getContext('2d').drawImage(i, 0, 0);
-            return { w: i.naturalWidth, h: i.naturalHeight, faixa: [...c.getContext('2d').getImageData(540, 1450, 1, 1).data] }; }""")
-        checar(info["w"] == 1080 and info["h"] == 1920 and info["faixa"][0] > 230 and info["faixa"][1] < 140,
-               "story do cupom: arte 1080x1920 no fundo da marca")
+            const px = (a, b) => [...c.getContext('2d').getImageData(a, b, 1, 1).data];
+            return { w: i.naturalWidth, h: i.naturalHeight, topo: px(540, 60), base: px(540, 1860), cartao: px(150, 960) }; }""")
+        rosa = lambda p: p[0] > 220 and p[2] > 150 and p[1] < 200
+        checar(info["w"] == 1080 and info["h"] == 1920 and rosa(info["topo"]) and rosa(info["base"]) and min(info["cartao"][:3]) > 240,
+               "story do cupom: fundo de cupons (padrão em cima e embaixo, cartão branco no meio)")
         janela = await pg.inner_text(".janela-story")
         checar("Copiar link" not in janela and "só o código" in janela, "story do cupom: sem link de afiliado, avisa que divulga só o código")
         await pg.screenshot(path=CAPTURAS / "dono_story_cupom.png")
