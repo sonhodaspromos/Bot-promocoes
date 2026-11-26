@@ -18,6 +18,7 @@ _PADROES = [
     (re.compile(r"sb_(secret|publishable)_[A-Za-z0-9_-]+"), r"sb_\1_***"),
     (re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "***JWT***"),
     (re.compile(r"(github_pat_|ghp_|gho_)[A-Za-z0-9_]{10,}"), r"\1***"),
+    (re.compile(r"sk-ant-[A-Za-z0-9_-]{10,}"), "sk-ant-***"),   # chave da API do Claude
     (re.compile(r"(access_token|client_secret|secret|password|senha|api_key|apikey|token|key)=([^&\s\"']+)", re.I), r"\1=***"),
     (re.compile(r"\"(access_token|client_secret|secret|password|senha|api_key|apikey|token|chave)\"\s*:\s*\"[^\"]*\"", re.I), r'"\1": "***"'),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.I), r"\1***"),

@@ -53,7 +53,12 @@ class MemoriaRepositorio(Repositorio):
                                   "fila", "historico", "comissoes", "execucoes", "logs", "precos", "cupons", "cupons_produtos", "cupons_pub",
                                   "comissoes_importacoes", "selecoes", "equivalentes", "experimentos", "resumos",
                                   "cliques", "comissoes_eventos", "canais_categorias", "tarefas", "alertas",
-                                  "alertas_avisos", "wa_inscritos", "wa_eventos", "wa_envios", "orcamento", "wa_webhook")}
+                                  "alertas_avisos", "wa_inscritos", "wa_eventos", "wa_envios", "orcamento", "wa_webhook",
+                                  "ia_prompts", "ia_chamadas", "ia_conteudos", "orcamento_historico")}
+        # prompt inicial do motor de IA (espelho resumido da migration 028)
+        self.t["ia_prompts"].append({"id": 9001, "chave": "copy_oferta", "versao": 1, "ativo": True,
+                                     "sistema": "Escreva textos de divulgação. Tom: {tom_de_voz}. Use só os dados. Responda em JSON.",
+                                     "modelo": "Escreva a chamada e o texto.\n<dados>\n{dados}\n</dados>"})
         self.cofre: dict[tuple[str, str], str] = {}
         self.relogio = agora  # os testes trocam para simular a passagem do tempo
         for codigo, nome, doms, modo, padrao in [
@@ -215,7 +220,8 @@ class MemoriaRepositorio(Repositorio):
                 "origem": pr["origem"], "publicada_em": pr["publicada_em"], "produto_id": prod["id"],
                 "pontuacao": pr.get("pontuacao"), "classificacao": pr.get("classificacao"), "analise": pr.get("analise"),
                 "preco_no_pix": bool(pr.get("preco_no_pix")),
-                "categoria_id": prod.get("categoria_id")}
+                "categoria_id": prod.get("categoria_id"),
+                "categoria": (self._um("categorias", id=prod.get("categoria_id")) or {}).get("nome")}
 
     def promocoes_para_enfileirar(self, limite):
         na_fila = {f["promocao_id"] for f in self.t["fila"] if f["status"] in ("pendente", "processando")}
@@ -944,6 +950,53 @@ class MemoriaRepositorio(Repositorio):
     def orcamento_estornar(self, servico, valor):
         o = self._orc(servico)
         o["gasto"] = max(0.0, round(o["gasto"] - abs(float(valor)), 4))
+
+    def orcamento_gasto_mes_antes_de_hoje(self, servico):
+        hoje = self._hoje()
+        return round(sum(o["gasto"] for o in self.t["orcamento"] + self.t["orcamento_historico"]
+                         if o["servico"] == servico and o["dia"] < hoje and o["dia"].year == hoje.year
+                         and o["dia"].month == hoje.month), 6)
+
+    # ---------------------------------------------------------------- motor de IA
+    def ia_prompt_ativo(self, chave):
+        p = next((x for x in self.t["ia_prompts"] if x["chave"] == chave and x["ativo"]), None)
+        return dict(p) if p else None
+
+    def ia_ultimas_chamadas(self, n):
+        cs = [c for c in self.t["ia_chamadas"] if c["resultado"] in ("sucesso", "erro", "invalido")]
+        return [dict(c) for c in sorted(cs, key=lambda c: c["id"], reverse=True)[:n]]
+
+    def ia_promocoes_sem_conteudo(self, prompt_id, limite):
+        feitas = {c["promocao_id"] for c in self.t["ia_conteudos"] if c["prompt_id"] == prompt_id}
+        prs = sorted((p for p in self.t["promocoes"] if p["status"] == "aprovada" and p["id"] not in feitas),
+                     key=lambda p: p["criado_em"])
+        return [p["id"] for p in prs][:limite]
+
+    def ia_conteudo_por_chave(self, chave):
+        c = self._um("ia_conteudos", chave_idem=chave)
+        return dict(c) if c else None
+
+    def ia_tentativas_invalidas(self, promocao_id, prompt_id):
+        return sum(1 for c in self.t["ia_chamadas"] if c["promocao_id"] == promocao_id and c["prompt_id"] == prompt_id
+                   and c["resultado"] == "invalido")
+
+    def ia_registrar_chamada(self, prompt_id, promocao_id, modelo, resultado, tokens_entrada, tokens_saida, custo, erro):
+        c = {"id": self._id(), "quando": self.relogio(), "prompt_id": prompt_id, "promocao_id": promocao_id, "modelo": modelo,
+             "resultado": resultado, "tokens_entrada": tokens_entrada, "tokens_saida": tokens_saida,
+             "custo_usd": round(float(custo), 6), "erro": erro}
+        self.t["ia_chamadas"].append(c)
+        return c["id"]
+
+    def ia_salvar_conteudo(self, chave, promocao_id, prompt_id, chamada_id, chamada, texto, status):
+        if self._um("ia_conteudos", chave_idem=chave):
+            return  # idempotente (no banco: unique + ignore-duplicates)
+        self.t["ia_conteudos"].append({"id": self._id(), "chave_idem": chave, "promocao_id": promocao_id, "prompt_id": prompt_id,
+                                       "chamada_id": chamada_id, "chamada": chamada, "texto": texto, "status": status,
+                                       "criado_em": self.relogio()})
+
+    def ia_conteudo_aprovado(self, promocao_id):
+        cs = [c for c in self.t["ia_conteudos"] if c["promocao_id"] == promocao_id and c["status"] == "aprovado"]
+        return dict(max(cs, key=lambda c: c["id"])) if cs else None
 
     def orcamento_situacao(self, servico):
         o = self._orc(servico)

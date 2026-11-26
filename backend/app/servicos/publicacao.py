@@ -52,6 +52,7 @@ class ServicoPublicacao:
         self.http = http or ClienteHTTP("validacao", tentativas=2)
         self.relogio = relogio
         self.canais_bloqueados: dict[str, str] = {}  # canal → motivo (token vencido nesta rodada)
+        self.ia = None                               # ServicoIA (o orquestrador liga); None = só texto padrão
         self._cota: dict[str, int | None] = {}       # cota restante do Instagram, consultada 1x por rodada
         self._bloqueio_real: str | None = None       # motivo para não publicar em canal real nesta rodada
         from .selecao import ServicoSelecao
@@ -514,6 +515,10 @@ class ServicoPublicacao:
             dados["cupom_codigo"], dados["preco_com_cupom"] = achado[0].codigo, achado[1]
             dados["cupom_na_pagina"] = not achado[0].codigo  # cupom sem código: ativado na página do produto
         aplicar_desconto_da_analise(dados)
+        if self.ia is not None:
+            texto_ia = self.ia.texto_para_publicar(dados, cfg)  # revalidado com os dados de agora; None = padrão
+            if texto_ia:
+                dados["ia_chamada"], dados["ia_texto"] = texto_ia["chamada"], texto_ia["texto"]
         # Amazon: a imagem do produto não é baixada nem re-hospedada na arte (regras de uso de conteúdo do
         # Programa de Associados); a arte sai com o fundo padrão.
         url_foto = None if (dados.get("marketplace") or "").lower() == "amazon" else dados.get("imagem_url")

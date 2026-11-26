@@ -7,7 +7,7 @@ begin
   teste := 'todos os recursos novos começam DESLIGADOS';
   begin
     select count(*) into n from public.configuracoes where chave like 'recursos.%' and valor <> 'false'::jsonb;
-    ok := n = 0 and (select count(*) from public.configuracoes where chave like 'recursos.%') = 8; detalhe := format('ligados: %s', n);
+    ok := n = 0 and (select count(*) from public.configuracoes where chave like 'recursos.%') = 9;  -- 8 da expansão + recursos.ia (028) detalhe := format('ligados: %s', n);
   exception when others then ok := false; detalhe := sqlerrm; end;
   return next;
 

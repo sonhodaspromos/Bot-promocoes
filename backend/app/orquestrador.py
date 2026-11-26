@@ -51,6 +51,9 @@ class Orquestrador:
         self.prazo, self.cronometro = prazo_segundos, cronometro
         from .modulos import Modulos
         self.modulos = Modulos(repo, integ, log, url_supabase, ambiente)
+        from .ia.servico import ServicoIA
+        self.ia = ServicoIA(repo, getattr(integ, "ia", None), log)
+        self.publicacao.ia = self.ia  # a publicação usa o texto aprovado (revalidado) quando a IA está ligada
 
     def sincronizar_modos(self) -> None:
         """Deixa o banco com o mesmo modo (real/demo/desativado) das integrações em uso."""
@@ -147,13 +150,16 @@ class Orquestrador:
         def modulos():
             resumo.modulos = self.modulos.executar(cfg)
 
+        def ia():
+            resumo.ia = self.ia.executar(cfg)
+
         def cupons():
             r = self.cupons.executar(cfg)
             resumo.campanhas, resumo.sugestoes_cupom, resumo.cupons_publicados = r["campanhas"], r["sugestoes"], r["cupons_publicados"]
 
         etapas = [("configuração", carregar), ("modos", self.sincronizar_modos), ("monitor", monitorar),
                   ("encerrar pausadas", encerrar), ("comissões", importar), ("busca", buscar),
-                  ("validação de links", validar), ("inteligência", analisar), ("fila", enfileirar), ("publicação", publicar),
+                  ("validação de links", validar), ("inteligência", analisar), ("textos da IA", ia), ("fila", enfileirar), ("publicação", publicar),
                   ("cupons", cupons), ("testes A/B", experimentos), ("módulos", modulos)]
         for nome, funcao in etapas:
             etapa(nome, funcao)

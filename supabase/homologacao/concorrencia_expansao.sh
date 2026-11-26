@@ -73,5 +73,19 @@ INS=$(cat /tmp/wh_*.txt | grep -c '^inscrito$'); DUP=$(cat /tmp/wh_*.txt | grep 
 E=$(P -c "select count(*) from public.whatsapp_eventos e join public.whatsapp_inscritos i on i.id = e.inscrito_id where i.telefone = '+5581922223333'")
 [ "$INS" = 1 ] && [ "$DUP" = 9 ] && [ "$E" = 1 ] && ok "processada 1 vez; 9 entregas repetidas ignoradas; 1 evento de opt-in" || nok "inscrito=$INS duplicada=$DUP eventos=$E"
 
+echo "7. IA: 12 salvamentos simultâneos do mesmo prompt (versões únicas, só uma em uso) e 30 reservas de US\$ 0,02 com teto de US\$ 0,50"
+D=$(P -c "select user_id from public.administradores where papel = 'dono' limit 1")
+[ -n "$D" ] || D=$(P -c "set testes.cadastro_direto = 'sim'; select testes.garantir_dono()" | tail -1)
+for i in $(seq 1 12); do
+  P -c "select set_config('request.jwt.claims', json_build_object('sub', '$D', 'role', 'authenticated', 'aal', 'aal2')::text, false);
+        select public.ia_prompt_salvar('conc_prompt', 'Sistema concorrente número $i com regras suficientes.', 'Escreva a chamada e o texto da oferta: {dados} $i')" >/dev/null &
+done; wait
+R=$(P -c "select count(*) || '|' || count(distinct versao) || '|' || count(*) filter (where ativo) || '|' || max(versao) from public.ia_prompts where chave = 'conc_prompt'")
+IFS='|' read -r tot dist ativos maxv <<< "$R"
+[ "$tot" = 12 ] && [ "$dist" = 12 ] && [ "$ativos" = 1 ] && [ "$maxv" = 12 ] && ok "12 versões (1 a 12), nenhuma repetida, exatamente 1 em uso" || nok "total=$tot distintas=$dist ativas=$ativos max=$maxv"
+for i in $(seq 1 30); do P -c "select public.orcamento_reservar('ia', 0.02, 0.5)" > /tmp/ia_$i.txt & done; wait
+S=$(cat /tmp/ia_*.txt | grep -c '^t$'); G=$(P -c "select gasto_usd from public.orcamento_consumo where servico = 'ia'"); rm -f /tmp/ia_*.txt
+[ "$S" = 25 ] && [ "$G" = "0.5000" ] && ok "IA: exatamente 25 reservas aceitas, gasto US\$ $G (nunca passou do teto)" || nok "aceitas=$S gasto=$G"
+
 dropdb -U "$U" "$DB"
 [ $FALHOU = 0 ] && echo "CONCORRÊNCIA DA EXPANSÃO: TUDO OK" || { echo "CONCORRÊNCIA DA EXPANSÃO: FALHOU"; exit 1; }
