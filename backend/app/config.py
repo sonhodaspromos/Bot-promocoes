@@ -32,6 +32,8 @@ CREDENCIAIS = {
     "amazon": [("AMAZON_CREDENTIAL_ID", "CREDENTIAL_ID"), ("AMAZON_CREDENTIAL_SECRET", "CREDENTIAL_SECRET"),
                ("AMAZON_PARTNER_TAG", "PARTNER_TAG")],   # AMAZON_TOKEN_URL/AMAZON_API_URL: opcionais (ver fontes/amazon.py)
     "whatsapp": [("WHATSAPP_TOKEN", "TOKEN"), ("WHATSAPP_PHONE_ID", "PHONE_ID"), ("WHATSAPP_TEMPLATE", "TEMPLATE")],
+    # motor de IA (textos): só é usado com recursos.ia ligado
+    "anthropic": [("ANTHROPIC_API_KEY", "API_KEY")],
 }
 
 

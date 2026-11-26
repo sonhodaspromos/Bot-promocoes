@@ -21,7 +21,7 @@ import requests
 
 from .erros import ErroIntegracao, EscritaBloqueada
 
-TEMPORARIOS = {408, 425, 429, 500, 502, 503, 504}
+TEMPORARIOS = {408, 425, 429, 500, 502, 503, 504, 529}  # 529 = provedor sobrecarregado (API do Claude)
 NAVEGADOR = "Mozilla/5.0 (compatible; BotDeOfertas/2.0; +https://github.com)"
 
 

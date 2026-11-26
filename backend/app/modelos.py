@@ -76,6 +76,7 @@ class ItemFila:
 @dataclass
 class ResumoExecucao:
     modulos: dict = field(default_factory=dict)   # vitrine, alertas, WhatsApp (quando ligados)
+    ia: dict = field(default_factory=dict)        # textos gerados/reaproveitados/descartados pela IA
     encontradas: int = 0
     novas_promocoes: int = 0
     links_validados: int = 0

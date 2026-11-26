@@ -30,6 +30,7 @@ class Integracoes:
     fontes: dict[str, FonteOfertas] = field(default_factory=dict)
     canais: dict[str, CanalPublicacao] = field(default_factory=dict)
     whatsapp: object | None = None          # ClienteWhatsApp (só produção, com credenciais e INTEGRACOES_ATIVAS)
+    ia: object | None = None                # ProvedorClaude (com a chave da API; usado só com recursos.ia ligado)
 
     @property
     def modo_geral(self) -> str:
@@ -67,7 +68,16 @@ def montar(config: Config, ordenacao_shopee: int = 2, ambiente: Ambiente | None 
     else:
         integ.canais["instagram_story"] = DemoCanal("instagram_story")
         integ.canais["instagram_feed"] = DemoCanal("instagram_feed")
+    integ.ia = _provedor_ia(config)
     return integ
+
+
+def _provedor_ia(config: Config):
+    """Provedor de IA quando há a chave da API (a etapa só roda com recursos.ia ligado)."""
+    if config.modo("anthropic") != REAL:
+        return None
+    from ..ia.provedor import ProvedorClaude
+    return ProvedorClaude(config.credencial("anthropic", "API_KEY"), ClienteHTTP("anthropic", timeout=45, tentativas=2))
 
 
 def _montar_por_ambiente(config: Config, ordenacao: int, amb: Ambiente) -> Integracoes:
@@ -124,6 +134,7 @@ def _montar_por_ambiente(config: Config, ordenacao: int, amb: Ambiente) -> Integ
         from ..servicos.whatsapp import ClienteWhatsApp
         integ.whatsapp = ClienteWhatsApp(config.credencial("whatsapp", "TOKEN"), config.credencial("whatsapp", "PHONE_ID"),
                                          config.credencial("whatsapp", "TEMPLATE"), ClienteHTTP("whatsapp", timeout=t))
+    integ.ia = _provedor_ia(config)  # homologação e produção (a demonstração já voltou antes, sem IA paga)
     return integ
 
 

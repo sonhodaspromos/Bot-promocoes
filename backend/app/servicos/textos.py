@@ -47,8 +47,10 @@ def legenda_telegram(d: dict, link: str, cfg: dict, variante: str = "A") -> str:
     preco = f"💥 <b>Por: {reais(d['preco_promocional'])}{pix}</b>"
     if variante == "B":
         linhas += [preco, ""]
-    linhas += [f"<b>{html.escape(headline(d, cfg))}</b>", "",
+    linhas += [f"<b>{html.escape(d.get('ia_chamada') or headline(d, cfg))}</b>", "",
                f"🛍️ {html.escape(d['titulo'])}", ""]
+    if d.get("ia_texto"):  # frase da IA (validada: sem números, links nem promessas fora dos dados)
+        linhas += [f"✨ {html.escape(d['ia_texto'])}", ""]
     desconto = float(d.get("desconto_pct") or 0) if mostra_desconto(d) else 0
     if desconto >= 1:
         linhas.append(f"😱🔻 <b>{desconto:.0f}% DE DESCONTO</b>")
@@ -82,6 +84,8 @@ def legenda_instagram(d: dict, cfg: dict, destaque: bool, variante: str = "A") -
     if variante == "B":
         linhas += [preco, ""]
     linhas += [f"🔥 {d['titulo']}", ""]
+    if d.get("ia_texto"):
+        linhas += [f"✨ {d['ia_texto']}", ""]
     if mostra_desconto(d) and d.get("preco_referencia") and float(d["preco_referencia"]) > float(d["preco_promocional"]):
         linhas.append(f"De {reais(d['preco_referencia'])}")
     if variante != "B":

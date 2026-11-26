@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 
 RECURSOS = ("fonte_amazon", "fonte_aliexpress", "whatsapp", "vitrine", "alertas_preco",
-            "canais_por_categoria", "agendamento_inteligente", "workers")
+            "canais_por_categoria", "agendamento_inteligente", "workers", "ia")
 
 
 def desligados_por_ambiente(env=None) -> set[str]:

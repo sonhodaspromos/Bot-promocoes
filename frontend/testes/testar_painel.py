@@ -66,7 +66,7 @@ async def main():
         checar("telegram" in alerta and "credencial recusada" in alerta, "resumo alerta canal com credencial recusada")
         await pg.screenshot(path=CAPTURAS / "1_resumo.png", full_page=True)
         largas = []
-        for tela in ["resumo", "ofertas", "nova", "cupons", "comissoes", "financeiro", "desempenho", "logs", "ajustes"]:
+        for tela in ["resumo", "ofertas", "nova", "cupons", "comissoes", "financeiro", "desempenho", "ia", "logs", "ajustes"]:
             await pg.click(f'nav button[data-tela="{tela}"]')
             await pg.wait_for_timeout(400)
             if await pg.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
@@ -204,9 +204,40 @@ async def main():
         ult = [c for c in await pg.evaluate("window.__chamadas") if c.get("rpc") == "cadastrar_oferta_manual"][-1]["args"]
         checar(ult["p_referencia_da_pagina"] is False and ult["p_preco_pix"] is False,
                "preço antigo digitado à mão não vai como 'da página' (e o Pix volta desmarcado)")
+        # ---- central de IA
+        await pg.click('nav button[data-tela="ia"]'); await pg.wait_for_timeout(500)
+        tela = await pg.inner_text("#conteudo")
+        checar("textos para aprovar" in tela.lower() and "Versão 2" in tela and "em uso" in tela and "Versão 1" in tela,
+               "IA: mostra textos para aprovar e as versões do prompt (com a em uso)")
+        checar(await pg.locator("#iat-501 b").count() == 0 and await pg.input_value("#iac-501") == "CHEIRINHO <b>DE</b> ACHADO 💖",
+               "IA: texto da IA aparece como texto (sem injetar HTML)")
+        checar("descartado (validação)" in tela and "199" in tela, "IA: uso mostra texto descartado e o motivo")
+        await pg.fill("#iax-501", "Fragrância marcante, ótima para presentear.")
+        await pg.click('[data-ia="aprovar"][data-id="501"]'); await pg.wait_for_timeout(300)
+        upd = [c for c in await pg.evaluate("window.__chamadas") if c.get("tabela") == "ia_conteudos" and c.get("operacao") == "update"]
+        checar(upd and upd[-1]["corpo"]["status"] == "aprovado" and upd[-1]["corpo"]["texto"] == "Fragrância marcante, ótima para presentear.",
+               "IA: aprovar envia status e o texto editado")
+        await pg.fill("#ia-psis", "Instruções v3 com regras suficientes e mais curtas")
+        await pg.fill("#ia-pnot", "teste")
+        await pg.click('#ia-pform button[type="submit"]'); await pg.wait_for_timeout(300)
+        rpcs = [c for c in await pg.evaluate("window.__chamadas") if c.get("rpc") == "ia_prompt_salvar"]
+        checar(rpcs and rpcs[-1]["args"]["p_chave"] == "copy_oferta" and "v3" in rpcs[-1]["args"]["p_sistema"],
+               "IA: editar o prompt cria nova versão pela função do banco")
+        await pg.click('[data-pv="1"]'); await pg.wait_for_timeout(300)
+        checar(any(c.get("rpc") == "ia_prompt_ativar" and c["args"]["p_id"] == 1 for c in await pg.evaluate("window.__chamadas")),
+               "IA: 'voltar para esta' restaura a versão anterior (rollback)")
+        await pg.evaluate("document.querySelector('#ia-ligada').checked = true"); await pg.fill("#ia-mes", "2000")
+        await pg.click('#ia-form button[type="submit"]'); await pg.wait_for_timeout(200)
+        checar("Tetos" in await pg.inner_text("#toast"), "IA: teto mensal acima do limite é recusado")
+        await pg.fill("#ia-mes", "10"); await pg.click('#ia-form button[type="submit"]'); await pg.wait_for_timeout(300)
+        cfgs = {c["filtros"][0][2]: c["corpo"]["valor"] for c in await pg.evaluate("window.__chamadas")
+                if c.get("tabela") == "configuracoes" and c.get("operacao") == "update" and c.get("filtros")}
+        checar(cfgs.get("recursos.ia") is True and cfgs.get("ia.orcamento_mensal_usd") == 10, "IA: dono liga a IA e muda o teto")
+        await pg.screenshot(path=CAPTURAS / "dono_ia.png", full_page=True)
         await pg.click('nav button[data-tela="ajustes"]'); await pg.wait_for_timeout(300)
         checar(await pg.locator("text=Credenciais (cifradas no cofre)").count() == 1, "dono vê a área de credenciais")
         checar(await pg.locator("text=••••a1b2").count() == 1, "credencial mostra só os 4 últimos caracteres")
+        await pg.evaluate("window.__chamadas = []")  # só as chamadas desta tela contam na checagem abaixo
         await pg.fill('[data-chave="publicacao.max_por_dia"]', "9999")
         await pg.click('#form-cfg button[type="submit"]'); await pg.wait_for_timeout(200)
         invalido = not await pg.evaluate("document.querySelector('#form-cfg').checkValidity()")

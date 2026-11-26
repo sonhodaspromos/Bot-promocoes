@@ -223,6 +223,16 @@ class Repositorio(ABC):
     def orcamento_reservar(self, servico: str, valor: float, teto: float) -> bool: raise NotImplementedError
     def orcamento_estornar(self, servico: str, valor: float) -> None: raise NotImplementedError
     def orcamento_situacao(self, servico: str) -> dict: raise NotImplementedError
+    def orcamento_gasto_mes_antes_de_hoje(self, servico: str) -> float: raise NotImplementedError
+    # ---- motor de IA (migration 028)
+    def ia_prompt_ativo(self, chave: str) -> dict | None: raise NotImplementedError
+    def ia_ultimas_chamadas(self, n: int) -> list[dict]: raise NotImplementedError
+    def ia_promocoes_sem_conteudo(self, prompt_id: int, limite: int) -> list[int]: raise NotImplementedError
+    def ia_conteudo_por_chave(self, chave: str) -> dict | None: raise NotImplementedError
+    def ia_tentativas_invalidas(self, promocao_id: int, prompt_id: int) -> int: raise NotImplementedError
+    def ia_registrar_chamada(self, prompt_id, promocao_id, modelo, resultado, tokens_entrada, tokens_saida, custo, erro) -> int: raise NotImplementedError
+    def ia_salvar_conteudo(self, chave, promocao_id, prompt_id, chamada_id, chamada, texto, status) -> None: raise NotImplementedError
+    def ia_conteudo_aprovado(self, promocao_id: int) -> dict | None: raise NotImplementedError
     def tarefa_renovar(self, tarefa_id: int, worker: str, bloqueio_min: int) -> bool: raise NotImplementedError
     def fila_saude(self) -> dict: raise NotImplementedError
     def taxas_cancelamento(self, dias: int = 180) -> dict[str, dict]: raise NotImplementedError
@@ -500,7 +510,7 @@ class SupabaseRepositorio(Repositorio):
     def dados_publicacao(self, promocao_id):
         linhas = self._get("vw_promocoes_painel", id=f"eq.{promocao_id}", select=(
             "id,status,titulo,imagem_url,preco_promocional,preco_referencia,desconto_pct,marketplace,"
-            "marketplace_nome,link_id,link_validado,demo,pontuacao,classificacao,analise,produto_id"))
+            "marketplace_nome,link_id,link_validado,demo,pontuacao,classificacao,analise,produto_id,categoria"))
         if not linhas:
             return None
         dados = linhas[0]
@@ -844,6 +854,51 @@ class SupabaseRepositorio(Repositorio):
 
     def orcamento_reservar(self, servico, valor, teto):
         return self._rpc("orcamento_reservar", p_servico=servico, p_valor=valor, p_teto=teto) is True
+
+    def orcamento_gasto_mes_antes_de_hoje(self, servico):
+        hoje = datetime.now(timezone(timedelta(hours=-3))).date()  # mesmo fuso de privado.dia_local (Brasília)
+        linhas = self._get("orcamento_consumo", select="gasto_usd", servico=f"eq.{servico}",
+                           dia=f"gte.{hoje.replace(day=1).isoformat()}", **{"and": f"(dia.lt.{hoje.isoformat()})"})
+        return round(sum(float(l["gasto_usd"]) for l in linhas), 6)
+
+    # ------------------------------------------------------------ motor de IA
+    def ia_prompt_ativo(self, chave):
+        linhas = self._get("ia_prompts", select="id,chave,versao,sistema,modelo", chave=f"eq.{chave}", ativo="is.true", limit="1")
+        return linhas[0] if linhas else None
+
+    def ia_ultimas_chamadas(self, n):
+        return self._get("ia_chamadas", select="resultado,quando", resultado="in.(sucesso,erro,invalido)",
+                         order="id.desc", limit=str(int(n)))
+
+    def ia_promocoes_sem_conteudo(self, prompt_id, limite):
+        feitas = {l["promocao_id"] for l in self._get("ia_conteudos", select="promocao_id", prompt_id=f"eq.{prompt_id}")}
+        linhas = self._get("promocoes", select="id", status="eq.aprovada", order="criado_em.asc", limit=str(int(limite) + len(feitas)))
+        return [l["id"] for l in linhas if l["id"] not in feitas][:int(limite)]
+
+    def ia_conteudo_por_chave(self, chave):
+        linhas = self._get("ia_conteudos", select="id,status", chave_idem=f"eq.{chave}", limit="1")
+        return linhas[0] if linhas else None
+
+    def ia_tentativas_invalidas(self, promocao_id, prompt_id):
+        return len(self._get("ia_chamadas", select="id", promocao_id=f"eq.{promocao_id}", prompt_id=f"eq.{prompt_id}",
+                             resultado="eq.invalido"))
+
+    def ia_registrar_chamada(self, prompt_id, promocao_id, modelo, resultado, tokens_entrada, tokens_saida, custo, erro):
+        linhas = self._req("POST", "ia_chamadas", params={"select": "id"}, prefer="return=representation", corpo={
+            "prompt_id": prompt_id, "promocao_id": promocao_id, "modelo": (modelo or "")[:80], "resultado": resultado,
+            "tokens_entrada": int(tokens_entrada), "tokens_saida": int(tokens_saida), "custo_usd": round(float(custo), 6),
+            "erro": (erro or None) and str(erro)[:500]})
+        return linhas[0]["id"] if linhas else None
+
+    def ia_salvar_conteudo(self, chave, promocao_id, prompt_id, chamada_id, chamada, texto, status):
+        self._req("POST", "ia_conteudos", params={"on_conflict": "chave_idem"}, prefer="resolution=ignore-duplicates,return=minimal",
+                  corpo={"chave_idem": chave, "promocao_id": promocao_id, "prompt_id": prompt_id, "chamada_id": chamada_id,
+                         "chamada": chamada, "texto": texto, "status": status})
+
+    def ia_conteudo_aprovado(self, promocao_id):
+        linhas = self._get("ia_conteudos", select="id,chamada,texto", promocao_id=f"eq.{promocao_id}", status="eq.aprovado",
+                           order="criado_em.desc", limit="1")
+        return linhas[0] if linhas else None
 
     def orcamento_estornar(self, servico, valor):
         self._rpc("orcamento_estornar", p_servico=servico, p_valor=valor)

@@ -18,6 +18,13 @@ function cfg(chave, valor) {
 
 const DADOS = {
   configuracoes: [
+    { chave: "recursos.ia", valor: false, tipo: "booleano", descricao: "Textos das ofertas escritos por IA" },
+    { chave: "ia.aprovacao_manual", valor: true, tipo: "booleano", descricao: "Aprovar textos da IA" },
+    { chave: "ia.orcamento_diario_usd", valor: 0.5, tipo: "numero", descricao: "Teto por dia", minimo: 0, maximo: 100 },
+    { chave: "ia.orcamento_mensal_usd", valor: 5, tipo: "numero", descricao: "Teto por mês", minimo: 0, maximo: 1000 },
+    { chave: "ia.max_por_rodada", valor: 5, tipo: "numero", descricao: "Textos por rodada", minimo: 0, maximo: 50 },
+    { chave: "ia.modelo", valor: "claude-haiku-5-5", tipo: "texto", descricao: "Modelo" },
+    { chave: "ia.tom_de_voz", valor: "Próxima e animada", tipo: "texto", descricao: "Tom de voz" },
     { chave: "publicacao.aprovacao_manual", valor: false, tipo: "booleano", descricao: "Se ligado, nada é publicado sem aprovação no painel" },
     { chave: "publicacao.max_por_dia", valor: 60, tipo: "numero", descricao: "Máximo de ofertas automáticas por dia", minimo: 1, maximo: 500 },
     { chave: "filtros.desconto_minimo", valor: 20, tipo: "numero", descricao: "Desconto mínimo (%)", minimo: 0, maximo: 95 },
@@ -83,7 +90,16 @@ const DADOS = {
       receita_cancelada_brl: 5, custos_faturados_usd: 10, custos_estimados_usd: 30, whatsapp_consumido_usd: 2 },
   ],
   custos_servicos: [{ id: 1, mes: hoje.slice(0, 8) + "01", servico: "supabase", valor_usd: 10, origem: "fatura", observacao: "plano" }],
-  orcamento_consumo: [{ servico: "whatsapp", dia: hoje, gasto_usd: 4.5, teto_usd: 5 }],
+  orcamento_consumo: [{ servico: "whatsapp", dia: hoje, gasto_usd: 4.5, teto_usd: 5 },
+    { servico: "ia", dia: new Date().toLocaleDateString("sv-SE", { timeZone: "America/Recife" }), gasto_usd: 0.0123, teto_usd: 0.5 }],
+  ia_conteudos: [{ id: 501, promocao_id: 13, chamada: "CHEIRINHO <b>DE</b> ACHADO 💖", texto: "Fragrância marcante para o dia a dia.",
+    status: "pendente", criado_em: agora }],
+  ia_chamadas: [
+    { quando: agora, resultado: "sucesso", tokens_entrada: 400, tokens_saida: 80, custo_usd: 0.00008, erro: null },
+    { quando: agora, resultado: "invalido", tokens_entrada: 390, tokens_saida: 70, custo_usd: 0.00007, erro: "número que não está nos dados: 199" }],
+  ia_prompts: [
+    { id: 2, versao: 2, sistema: "Instruções v2 com regras suficientes", modelo: "Pedido {dados}", notas: "mais curto", ativo: true, criado_em: agora },
+    { id: 1, versao: 1, sistema: "Instruções v1 com regras suficientes", modelo: "Pedido {dados}", notas: "Versão inicial", ativo: false, criado_em: agora }],
   vw_conciliacao_comissoes: [
     { marketplace: "shopee", competencia: "2026-09-01", valor_pendente: 0, valor_confirmado: 25.5, valor_cancelado: 4, valor_pago: 0, pendentes_antigas: 0, confirmadas_sem_repasse: 2, repasse: null },
   ],

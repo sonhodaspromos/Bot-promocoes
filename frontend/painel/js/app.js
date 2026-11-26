@@ -13,6 +13,7 @@ const TELAS = {
   desempenho: () => import("./telas/desempenho.js"),
   logs: () => import("./telas/logs.js"),
   ajustes: () => import("./telas/ajustes.js"),
+  ia: () => import("./telas/ia.js"),
 };
 
 const ctx = { sb, papel: null, podeEditar: false, ehDono: false, email: "" };

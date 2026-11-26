@@ -10,6 +10,7 @@ const CREDENCIAIS = [
   ["shopee", "APP_ID", "Shopee · App ID"], ["shopee", "SECRET", "Shopee · Secret"],
   ["telegram", "TOKEN", "Telegram · token do bot"], ["telegram", "CANAL", "Telegram · @canal"],
   ["instagram", "TOKEN", "Instagram · token"], ["instagram", "USER_ID", "Instagram · ID da conta"], ["imgbb", "KEY", "ImgBB · chave"],
+  ["anthropic", "API_KEY", "IA (Claude) · chave da API"],
 ];
 
 export async function montar(el, ctx) {
