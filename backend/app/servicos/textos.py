@@ -14,28 +14,53 @@ def mostra_desconto(d: dict) -> bool:
     return bool(d.get("desconto_comprovado", True))
 
 
+HEADLINES_TELEGRAM = [
+    "O SITE TÁ FICANDO LOUCO COM ESSE PRECINHO 😵💖",
+    "CORRE QUE ESSE PREÇO NÃO DURA 🏃‍♀️💨",
+    "ACHADINHO DO DIA PRA VOCÊ 💖",
+    "PREÇO DE BANANA DETECTADO 🍌",
+    "OLHA ESSE DESCONTO 😱",
+    "PROMOÇÃO QUE DÁ GOSTO DE VER 😍",
+]
+
+
+def headline(d: dict, cfg: dict) -> str:
+    """Chamada do topo, em rodízio fixo por oferta (a mesma oferta sempre recebe a mesma).
+    A lista pode ser trocada no painel (textos.headlines_telegram)."""
+    lista = [str(h).strip() for h in (cfg.get("textos.headlines_telegram") or []) if str(h).strip()] or HEADLINES_TELEGRAM
+    chave = d.get("promocao_id") or d.get("id") or sum(map(ord, str(d.get("titulo") or "")))
+    try:
+        n = int(chave)
+    except (TypeError, ValueError):
+        n = sum(map(ord, str(chave)))
+    return lista[n % len(lista)]
+
+
 def legenda_telegram(d: dict, link: str, cfg: dict, variante: str = "A") -> str:
-    """variante B (teste A/B de legenda): preço em destaque ANTES do título. A = formato original."""
+    """Formato Sonho das Promos: chamada, produto, desconto, de/por, link e aviso de preço/estoque.
+    Variante B (teste A/B "preço primeiro"): a linha do preço vem antes da chamada.
+    "De" e "% de desconto" só aparecem com desconto comprovado; o #publi fica no fim."""
     linhas = []
     if d.get("demo"):
-        linhas.append("🧪 <b>[DEMONSTRAÇÃO — não é uma oferta real]</b>")
-    if cfg.get("transparencia.marcar_publi", True):
-        linhas.append("<i>#publi</i>")
-    desconto = float(d.get("desconto_pct") or 0) if mostra_desconto(d) else 0
-    preco = f"✅ Por <b>{reais(d['preco_promocional'])}</b>" + (f"  ({desconto:.0f}% OFF)" if desconto else "")
+        linhas += ["🧪 <b>[DEMONSTRAÇÃO — não é uma oferta real]</b>", ""]
+    preco = f"💥 <b>Por: {reais(d['preco_promocional'])}</b>"
     if variante == "B":
         linhas += [preco, ""]
-    linhas += [f"🔥 <b>{html.escape(d['titulo'])}</b>", ""]
+    linhas += [f"<b>{html.escape(headline(d, cfg))}</b>", "",
+               f"🛍️ {html.escape(d['titulo'])}", ""]
+    desconto = float(d.get("desconto_pct") or 0) if mostra_desconto(d) else 0
+    if desconto >= 1:
+        linhas.append(f"😱🔻 <b>{desconto:.0f}% DE DESCONTO</b>")
     if mostra_desconto(d) and d.get("preco_referencia") and float(d["preco_referencia"]) > float(d["preco_promocional"]):
-        linhas.append(f"❌ De <s>{reais(d['preco_referencia'])}</s>")
+        linhas.append(f"De: <s>{reais(d['preco_referencia'])}</s>")
     if variante != "B":
         linhas.append(preco)
     if d.get("cupom_codigo") and d.get("preco_com_cupom"):
         linhas.append(f"🎟 Com o cupom <code>{html.escape(d['cupom_codigo'])}</code>: <b>{reais(d['preco_com_cupom'])}</b>")
-    linhas += ["", f"🛒 {html.escape(d.get('marketplace_nome') or '')}: {html.escape(link)}"]
-    aviso = cfg.get("transparencia.aviso_afiliado")
-    if aviso:
-        linhas += ["", f"<i>{html.escape(aviso)}</i>"]
+    linhas += ["", "🛒 <b>Compre aqui:</b>", html.escape(link), "",
+               "⚠️ <b>Promoção sujeita à alteração de preço e estoque do site</b>"]
+    if cfg.get("transparencia.marcar_publi", True):  # no Telegram, só o #publi (a dona pediu sem o aviso de comissão)
+        linhas += ["", "<i>#publi</i>"]
     return "\n".join(linhas)[:1024]
 
 
@@ -92,9 +117,6 @@ def legenda_cupom_telegram(c, cfg: dict) -> str:
         linhas.append(f"ℹ️ {html.escape(c.regras)}")
     if c.link_afiliado:
         linhas += ["", f"🛒 Aproveite aqui: {html.escape(c.link_afiliado)}"]
-    aviso = cfg.get("transparencia.aviso_afiliado")
-    if aviso:
-        linhas += ["", f"<i>{html.escape(aviso)}</i>"]
     return "\n".join(linhas)[:1024]
 
 

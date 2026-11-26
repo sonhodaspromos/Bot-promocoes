@@ -263,7 +263,7 @@ def test_vitrine_mostra_hora_da_conferencia_e_aviso_amazon_so_com_amazon(tmp_pat
     g.gerar([_of()], [], tmp_path, AGORA)
     index = (tmp_path / "index.html").read_text()
     assert "preço conferido em 25/11 às 11:30; pode ter mudado na loja" in index and AVISO_AMAZON not in index
-    assert index.count("<h1") == 1 and 'onerror="this.remove()"' in index and "#c2361a" in index and "focus-visible" in index
+    assert index.count("<h1") == 1 and 'onerror="this.remove()"' in index and "#dc1b63" in index and "focus-visible" in index
     g.gerar([_of(), _of(promocao_id=2, marketplace_codigo="amazon", marketplace_nome="Amazon", titulo="Kindle")], [], tmp_path / "b", AGORA)
     assert AVISO_AMAZON in (tmp_path / "b" / "index.html").read_text()
     assert AVISO_AMAZON in next((tmp_path / "b" / "oferta").glob("2-*.html")).read_text()

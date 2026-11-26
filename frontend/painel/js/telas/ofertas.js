@@ -1,8 +1,10 @@
 // Ofertas: filtrar, aprovar, rejeitar, pausar e reativar.
 import { q } from "../api.js";
 import { $, $$, ROTULO_STATUS, aviso, brl, dataHora, esc, urlSegura } from "../ui.js";
+import { compartilharStory, desenharStory, linkDoStory } from "../story.js";
 
 const POR_PAGINA = 30;
+let itensCarregados = new Map();
 let filtro = { status: "encontrada", categoria: "", busca: "", classe: "", ordem: "recentes" }, pagina = 0;
 const CLASSES = { excelente: ["Excelente oportunidade", "cl-excelente"], boa: ["Boa oportunidade", "cl-boa"],
   nao_recomendada: ["Oferta não recomendada", "cl-nao"] };
@@ -44,13 +46,14 @@ export async function montar(el, ctx) {
   });
   $("#lista", el).addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-acao]");
-    if (b) acao(el, ctx, b.dataset.id, b.dataset.acao);
+    if (b?.dataset.acao === "story") abrirStory(ctx, itensCarregados.get(String(b.dataset.id)));
+    else if (b) acao(el, ctx, b.dataset.id, b.dataset.acao);
   });
   await carregar(el, ctx, true);
 }
 
 async function carregar(el, ctx, reiniciar) {
-  if (reiniciar) { pagina = 0; $("#lista", el).innerHTML = '<p class="muted">Carregando…</p>'; }
+  if (reiniciar) { pagina = 0; itensCarregados = new Map(); $("#lista", el).innerHTML = '<p class="muted">Carregando…</p>'; }
   let consulta = ctx.sb.from("vw_promocoes_painel").select("*");
   if (filtro.status) consulta = consulta.eq("status", filtro.status);
   if (filtro.categoria) consulta = consulta.eq("categoria_id", filtro.categoria);
@@ -62,6 +65,7 @@ async function carregar(el, ctx, reiniciar) {
     .range(pagina * POR_PAGINA, pagina * POR_PAGINA + POR_PAGINA - 1);
   try {
     const itens = await q(consulta);
+    itens.forEach((o) => itensCarregados.set(String(o.id), o));
     const html = itens.map((o) => cartao(o, ctx)).join("");
     if (reiniciar) $("#lista", el).innerHTML = html || '<p class="muted">Nenhuma oferta aqui.</p>';
     else $("#lista", el).insertAdjacentHTML("beforeend", html);
@@ -94,6 +98,7 @@ function cartao(o, ctx) {
       ${o.motivo_status ? `<div class="m" style="color:var(--erro)">Motivo: ${esc(o.motivo_status)}</div>` : ""}
       ${explicacao(o)}
       <div class="acoes">${acoes.map(([a, t, c]) => `<button class="b ${c}" data-acao="${a}" data-id="${o.id}">${t}</button>`).join("")}
+        ${["aprovada", "publicada"].includes(o.status) && o.link_url ? `<button class="b p" data-acao="story" data-id="${o.id}">📲 Story</button>` : ""}
         ${o.link_url ? `<a class="b" href="${esc(urlSegura(o.link_url))}" target="_blank" rel="noopener noreferrer">Abrir link</a>` : ""}</div>
     </div></div>`;
 }
@@ -151,4 +156,49 @@ function historicoPrecos(h) {
     <p class="m">${h.menor_preco != null ? `Menor preço observado: ${brl(h.menor_preco)} (monitorado há ${Math.round(h.dias_monitorados)} dias).` : ""}
       ${(h.desconto_artificial || []).map((t) => `<br>⚠️ ${esc(t)}`).join("")}
       ${(h.sem_dados || []).map((t) => `<br>Sem dados: ${esc(t)}`).join("")}</p>`;
+}
+
+// ---- story manual: prévia, compartilhar/salvar e copiar o link do adesivo ----
+let cores;
+async function abrirStory(ctx, o) {
+  if (!o) return;
+  const janela = document.createElement("div");
+  janela.className = "janela-story";
+  janela.setAttribute("role", "dialog"); janela.setAttribute("aria-modal", "true"); janela.setAttribute("aria-label", "Story para o Instagram");
+  janela.innerHTML = '<div class="caixa"><p class="muted centro">Montando o story…</p></div>';
+  document.body.appendChild(janela);
+  const fechar = () => janela.remove();
+  janela.addEventListener("click", (e) => { if (e.target === janela) fechar(); });
+  try {
+    if (!cores) {
+      const cfg = await q(ctx.sb.from("configuracoes").select("chave,valor").in("chave", ["visual.cor_principal", "visual.cor_destaque"]));
+      const v = Object.fromEntries(cfg.map((c) => [c.chave, c.valor]));
+      const cor = (x) => (/^#[0-9a-f]{6}$/i.test(x || "") ? x : null);
+      cores = { principal: cor(v["visual.cor_principal"]), destaque: cor(v["visual.cor_destaque"]) };
+    }
+    const { canvas, semFoto } = await desenharStory(o, cores);
+    const blob = await new Promise((ok) => canvas.toBlob(ok, "image/jpeg", 0.92));
+    const url = URL.createObjectURL(blob), link = linkDoStory(o);
+    janela.innerHTML = `<div class="caixa">
+      <img src="${url}" alt="Prévia do story">
+      ${semFoto ? '<p class="m" style="color:var(--aviso)">A loja não liberou a foto para o painel: o story saiu sem ela. Você pode pôr a foto por cima no Instagram.</p>' : ""}
+      <button class="b p grande" data-x="compartilhar">📲 Compartilhar / salvar imagem</button>
+      <button class="b grande" data-x="copiar" ${link ? "" : "disabled"}>🔗 Copiar link do adesivo</button>
+      <p class="m">No Instagram: crie o story com a imagem, toque no ícone de adesivos → <b>Link</b>, cole o link e ponha o adesivo em cima da faixa “Clique aqui”.
+        ${o.link_validado ? "" : "<br>Este link ainda não foi conferido pelo bot; os cliques do story não entram nas estatísticas."}</p>
+      <button class="b grande" data-x="fechar">Fechar</button></div>`;
+    janela.addEventListener("click", async (e) => {
+      const x = e.target.closest("[data-x]")?.dataset.x;
+      if (x === "fechar") { URL.revokeObjectURL(url); fechar(); }
+      if (x === "compartilhar") {
+        const r = await compartilharStory(blob, `story-${o.id}.jpg`);
+        if (r === "baixado") aviso("Imagem baixada ✔ (no iPhone, também dá para tocar e segurar a prévia)");
+      }
+      if (x === "copiar") {
+        try { await navigator.clipboard.writeText(link); aviso("Link copiado ✔"); }
+        catch { prompt("Copie o link:", link); }
+      }
+    });
+  } catch (e) { janela.innerHTML = `<div class="caixa"><p>Erro ao montar o story: ${esc(e.message)}</p><button class="b grande" data-x="fechar">Fechar</button></div>`;
+    janela.querySelector("[data-x]").addEventListener("click", fechar); }
 }
