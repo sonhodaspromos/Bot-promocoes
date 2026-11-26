@@ -349,7 +349,7 @@ def test_ab_de_legenda_registra_variante_e_muda_a_legenda():
     canal = pub_.canais["telegram"]
     for h, conteudo in zip([h for h in hist if repo._um("canais", id=h["canal_id"])["codigo"] == "telegram"], canal.publicados):
         primeira = [l for l in conteudo.legenda.splitlines() if l and "publi" not in l][0]
-        assert primeira.startswith("✅ Por") == (h["variante"] == "B")
+        assert primeira.startswith("💥 <b>Por") == (h["variante"] == "B")
 
 
 def test_avaliacao_do_experimento_grava_resultado():

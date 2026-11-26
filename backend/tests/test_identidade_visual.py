@@ -49,3 +49,37 @@ def test_fundo_corrompido_nao_derruba_a_arte(monkeypatch, tmp_path):
 
 def test_fonte_da_marca_disponivel():
     assert "Poppins" in arte.fonte(40, True).getname()[0]
+
+
+# ---- legenda do Telegram no formato da marca ----
+from app.servicos import textos  # noqa: E402
+
+D = {"promocao_id": 1, "titulo": "Fone <Premium>", "preco_promocional": 89.9, "preco_referencia": 199.9,
+     "desconto_pct": 55, "marketplace_nome": "Shopee", "desconto_comprovado": True}
+
+
+def test_legenda_telegram_no_formato_da_marca():
+    t = textos.legenda_telegram(D, "https://s.shopee.com.br/x", {"transparencia.marcar_publi": True,
+                                                                  "transparencia.aviso_afiliado": "Posso ganhar comissão."})
+    linhas = t.splitlines()
+    assert linhas[0].startswith("<b>") and linhas[0].endswith("</b>")  # chamada em negrito no topo
+    assert "🛍️ Fone &lt;Premium&gt;" in t
+    assert "😱🔻 <b>55% DE DESCONTO</b>" in t and "De: <s>R$ 199,90</s>" in t and "💥 <b>Por: R$ 89,90</b>" in t
+    assert "🛒 <b>Compre aqui:</b>\nhttps://s.shopee.com.br/x" in t
+    assert "⚠️ <b>Promoção sujeita à alteração de preço e estoque do site</b>" in t
+    assert linhas[-1] == "<i>#publi · Posso ganhar comissão.</i>"
+
+
+def test_legenda_sem_desconto_comprovado_nao_mostra_de_nem_porcentagem():
+    t = textos.legenda_telegram({**D, "desconto_comprovado": False}, "https://l", {})
+    assert "DE DESCONTO" not in t and "199,90" not in t and "Por: R$ 89,90" in t and "#publi" in t
+
+
+def test_headline_fixa_por_oferta_e_lista_configuravel():
+    assert textos.headline(D, {}) == textos.headline(D, {})
+    assert {textos.headline({**D, "promocao_id": i}, {}) for i in range(12)} == set(textos.HEADLINES_TELEGRAM)
+    assert textos.headline(D, {"textos.headlines_telegram": ["SÓ ESSA 💖"]}) == "SÓ ESSA 💖"
+
+
+def test_legenda_cabe_no_limite_do_telegram():
+    assert len(textos.legenda_telegram({**D, "titulo": "x" * 3000}, "https://l", {})) <= 1024
