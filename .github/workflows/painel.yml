@@ -27,17 +27,24 @@ jobs:
       - run: pip install "playwright>=1.47,<2" && python -m playwright install --with-deps chromium
       - run: python frontend/testes/testar_painel.py
 
-  publicar:
+  empacotar:
     needs: testar          # painel com teste falhando não é publicado
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
           path: frontend/painel
+
+  # A publicação fica num job separado: o artefato só aparece para o deploy-pages depois que o job
+  # que o enviou termina (enviar e publicar no mesmo job falha com "No artifacts named github-pages").
+  publicar:
+    needs: empacotar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
       - id: deploy
         uses: actions/deploy-pages@v5
