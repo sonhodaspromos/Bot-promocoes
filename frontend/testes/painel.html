@@ -17,9 +17,12 @@
     window.fetch = async (url) => new Response(JSON.stringify({ ok: true, mensagem: "Rodada disparada! (teste)" }), { status: 200 });
   </script>
   <header class="topo">
-    <div>
-      <h1 id="titulo">Bot de Ofertas</h1>
+    <div class="marca">
+      <img src="../painel/img/logo.png" alt="" width="40" height="40" class="logo">
+      <div>
+      <h1 id="titulo">Sonho das Promos</h1>
       <span id="papel" class="papel hide"></span>
+      </div>
     </div>
     <div class="topo-acoes">
       <button id="btn-publicar" class="b claro hide" title="Rodar o bot agora">⚡ Publicar agora</button>

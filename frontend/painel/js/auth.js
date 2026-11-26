@@ -23,6 +23,7 @@ export async function papelAtual() {
 export function telaLogin(el, aoEntrar) {
   el.innerHTML = `
     <section class="login">
+      <img class="logo-login" src="${new URL("../img/logo.png", import.meta.url)}" alt="Sonho das Promos" width="150" height="150">
       <div class="card">
         <h2>Entrar no painel</h2>
         <form id="form-login">

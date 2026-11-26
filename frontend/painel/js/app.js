@@ -68,7 +68,7 @@ async function iniciar() {
   ctx.ehDono = ctx.papel === "dono";
 
   const { data: nome } = await sb.from("configuracoes").select("valor").eq("chave", "visual.nome_perfil").maybeSingle();
-  $("#titulo").textContent = (nome?.valor || "Bot de Ofertas") + " · Painel";
+  $("#titulo").textContent = (nome?.valor || "Sonho das Promos") + " · Painel";
   $("#papel").textContent = ctx.papel;
   $("#papel").classList.remove("hide");
   $("#btn-sair").classList.remove("hide");

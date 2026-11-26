@@ -117,3 +117,32 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .janela-story .caixa { background: #fff; border-radius: var(--r); padding: 14px; width: min(420px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
 .janela-story img { width: 100%; max-height: 56vh; object-fit: contain; border-radius: 10px; -webkit-touch-callout: default; }
 .janela-story .m { color: var(--mu); font-size: 12.5px; }
+
+/* ===== Tema Sonho das Promos (rosa da logo) ===== */
+@font-face { font-family: "PoppinsMarca"; src: url("../fontes/Poppins-Bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+:root { --p: #DC1B63; --p-escuro: #B9033F; --p-vivo: #F12D78; --p-claro: #FCE0F5; --p-claro2: #FDEEF7;
+  --p2: #FDC302; --bg: #FDEEF7; --ln: #F6CDE1; --mu: #7a5a6a; --demo: #B9033F; }
+body { background: linear-gradient(180deg, #FCE0F5 0, #FDEEF7 320px) fixed; }
+h1, h2, .kpi .v, .b.grande { font-family: "PoppinsMarca", system-ui, sans-serif; }
+h2 { color: var(--p-escuro); }
+h3 { color: var(--p); }
+.topo { background: linear-gradient(90deg, var(--p-vivo), var(--p)); box-shadow: 0 2px 10px rgba(185, 3, 63, .25); }
+.faixa-demo { background: var(--p-escuro); }
+.card, .cat { border-color: var(--ln); box-shadow: 0 1px 6px rgba(220, 27, 99, .07); }
+.kpi .v { color: var(--p-escuro); }
+.b { background: var(--p-claro); color: var(--p-escuro); }
+.b.p { background: var(--p); color: #fff; }
+.b.claro { background: rgba(255,255,255,.22); color: #fff; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--p-vivo); outline-offset: 0; border-color: var(--p-vivo); }
+.chip { border-color: var(--ln); color: var(--p-escuro); }
+.chip.on { background: var(--p); border-color: var(--p); color: #fff; }
+.nav { border-top: 2px solid var(--p-claro); }
+.nav button.on { color: var(--p); }
+.st-demo { background: var(--p-claro); color: var(--p-escuro); }
+.oferta .sem-foto, .oferta img { background: var(--p-claro2); }
+.exec:hover { background: var(--p-claro2); }
+.tg input:checked + span { background: var(--p); }
+.toast { background: var(--p-escuro); }
+.login .card { text-align: left; border: 2px solid var(--p-claro); }
+.logo-login { display: block; width: 150px; height: 150px; margin: 0 auto 8px; border-radius: 50%; box-shadow: 0 4px 18px rgba(220, 27, 99, .25); }
+.janela-story { background: rgba(185, 3, 63, .45); }
