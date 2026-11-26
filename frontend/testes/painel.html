@@ -18,7 +18,7 @@
       if (String(url).includes("/functions/v1/puxar-dados")) {
         window.__puxar = JSON.parse(op.body);
         return new Response(JSON.stringify({ titulo: "Perfume <b>Teste</b> 30ml", preco: 241, preco_antigo: 419.9,
-          imagem_url: "https://http2.mlstatic.com/foto.webp", id_externo: "MLB123456789" }), { status: 200 });
+          imagem_url: "https://http2.mlstatic.com/foto.webp", id_externo: "MLB123456789", preco_pix: true }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true, mensagem: "Rodada disparada! (teste)" }), { status: 200 });
     };

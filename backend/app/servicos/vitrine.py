@@ -118,7 +118,8 @@ class GeradorVitrine:
                 f'<div>{de}</div><div class="preco">{reais(o["preco"])}</div>'
                 + (f'<div class="conferido">preço conferido em {_e(_conferido(o.get("conferido_em")))}; pode ter mudado na loja</div>'
                    if _conferido(o.get("conferido_em")) else "")
-                + (f'<div>🎟 cupom <code>{_e(o["cupom_codigo"])}</code></div>' if o.get("cupom_codigo") else "")
+                + (f'<div>🎟 cupom <code>{_e(o["cupom_codigo"])}</code></div>' if o.get("cupom_codigo")
+                   else '<div>🎟 com cupom da loja (ative na página)</div>' if o.get("cupom_na_pagina") else "")
                 + f'<div class="loja">{_e(o.get("marketplace_nome") or "")}</div>'
                 f'<a class="botao" href="{_e(self.link(o))}" rel="sponsored nofollow noopener" target="_blank">Ver na loja</a></article>')
 

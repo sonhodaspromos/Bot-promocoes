@@ -51,7 +51,7 @@ class EntradaAnalise:
     link_situacao: str                        # validado | pendente | invalido
     preco_produto: float | None = None        # preço atual do produto (conferência de consistência)
     preco_referencia: float | None = None     # "preço de" informado
-    origem_referencia: str | None = None      # loja | manual | None
+    origem_referencia: str | None = None      # loja | manual | pagina (riscado lido pelo bot na página) | None
     historico: list[PontoPreco] = field(default_factory=list)
     comissao_pct: float | None = None
     nota: float | None = None
@@ -256,10 +256,18 @@ def _desconto(e, r, agora, bloqueios, alertas, motivos):
             base = f"maior preço visto em {cobertura} dias ({_reais(maior)})"
             alertas.append(f"\"Preço de\" {_reais(ref)} nunca apareceu no histórico de {cobertura} dias "
                            f"(maior preço visto: {_reais(maior)}): desconto calculado pelo histórico")
+        elif e.origem_referencia == "pagina" and r.aceitar_preco_pagina:
+            desconto, conf = (ref - e.preco) / ref * 100, 0.9
+            base = "preço riscado exibido na página da loja (lido pelo bot)"
         else:
             desconto, conf = (ref - e.preco) / ref * 100, 0.7
             base = "preço informado pela loja (histórico ainda curto para confirmar)"
             alertas.append(f"Histórico cobre só {cobertura} dia(s): o desconto informado ainda não pôde ser confirmado")
+    elif ref and e.origem_referencia == "pagina" and r.aceitar_preco_pagina and not e.desconto_por_cupom:
+        # a própria loja mostra o "de R$ X" riscado e o bot leu da página (não foi digitado): conta como comprovado.
+        # Com histórico suficiente, o ramo de cima confere se esse "preço de" é real.
+        desconto, conf = (ref - e.preco) / ref * 100, 0.9
+        base = "preço riscado exibido na página da loja (lido pelo bot)"
     elif ref:
         desconto = (ref - e.preco) / ref * 100
         conf = 0.7 if e.origem_referencia == "loja" else 0.5

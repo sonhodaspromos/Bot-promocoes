@@ -34,7 +34,7 @@ const PAGINA_ML = `<html><head><title>Perfume Teste 30ml | Mercado Livre</title>
 test("lê título, foto, preço, preço antigo e código do Mercado Livre", () => {
   assert.deepEqual(extrairProduto(PAGINA_ML), {
     titulo: "Perfume Teste 30ml", imagem_url: "https://http2.mlstatic.com/D_NQ_NP_999-O.webp",
-    preco: 241, preco_antigo: 419.9, id_externo: "MLB123456789",
+    preco: 241, preco_antigo: 419.9, preco_pix: false, id_externo: "MLB123456789",
   });
 });
 
@@ -73,4 +73,13 @@ test("preço atual pelo texto de acessibilidade 'Agora:'", () => {
 
 test("preço no título com milhar", () => {
   assert.equal(extrairProduto(`<meta property="og:title" content="TV 50 - R$ 2.199,90">`).preco, 2199.9);
+});
+
+test("reconhece preço no Pix ao lado do preço principal", () => {
+  const html = `<meta property="og:title" content="Perfume - R$ 318,72">
+    <span aria-label="Agora: 318 reais com 72 centavos">R$ 318,72</span><span class="x">13% OFF</span> <span>no Pix</span>`;
+  assert.equal(extrairProduto(html).preco_pix, true);
+  assert.equal(extrairProduto(`<span aria-label="Agora: 10 reais">R$ 10</span><p>sem pix aqui</p>`).preco_pix, false);
+  const longe = `<span aria-label="Agora: 10 reais">R$ 10</span>${"x".repeat(5000)}<footer>Pague com 10% OFF no Pix</footer>`;
+  assert.equal(extrairProduto(longe).preco_pix, false);
 });

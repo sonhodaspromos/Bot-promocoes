@@ -148,10 +148,14 @@ def criar_arte(d: dict, foto: Image.Image, largura: int, altura: int, cfg: dict,
         y += fa.size + 10
     fp = fonte(96 if story else 84, True)
     dr.text((2 * m, y), reais(d["preco_promocional"]), fill=principal, font=fp)
+    if d.get("preco_no_pix"):
+        x_pix = 2 * m + dr.textlength(reais(d["preco_promocional"]), font=fp) + 16
+        dr.text((x_pix, y + fp.size - 4), "no Pix", fill="#555555", font=fonte(36 if story else 32, True), anchor="ls")
     y_loja = y + fp.size + 18
-    if d.get("cupom_codigo") and d.get("preco_com_cupom"):
+    if d.get("preco_com_cupom") and (d.get("cupom_codigo") or d.get("cupom_na_pagina")):
         fc = fonte(36 if story else 32, True)
-        txt = f"COM O CUPOM {d['cupom_codigo']}: {reais(d['preco_com_cupom'])}"
+        txt = (f"COM O CUPOM {d['cupom_codigo']}: {reais(d['preco_com_cupom'])}" if d.get("cupom_codigo")
+               else f"COM CUPOM DA LOJA: {reais(d['preco_com_cupom'])}")
         largura_txt = min(dr.textlength(txt, font=fc) + 40, largura - 4 * m)
         dr.rounded_rectangle((2 * m, y_loja, 2 * m + largura_txt, y_loja + fc.size + 24), radius=16, fill=realce)
         dr.text((2 * m + 20, y_loja + (fc.size + 24) // 2), txt, fill="black", font=fc, anchor="lm")

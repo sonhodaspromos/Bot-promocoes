@@ -1,7 +1,7 @@
 // Ofertas: filtrar, aprovar, rejeitar, pausar e reativar.
 import { q } from "../api.js";
 import { $, $$, ROTULO_STATUS, aviso, brl, dataHora, esc, urlSegura } from "../ui.js";
-import { desenharStory, janelaStory, linkDoStory } from "../story.js";
+import { desenharStory, janelaStory, linkDoStory, melhorCupom } from "../story.js";
 
 const POR_PAGINA = 30;
 let itensCarregados = new Map();
@@ -159,10 +159,31 @@ function historicoPrecos(h) {
 }
 
 // ---- story manual: prévia, compartilhar/salvar e copiar o link do adesivo ----
+async function cupomDaOferta(ctx, o) {
+  try {
+    const ligados = await q(ctx.sb.from("cupons_produtos").select("cupom_id").eq("promocao_id", o.id).eq("aprovado", true));
+    if (!ligados.length) return null;
+    const agora = new Date().toISOString();
+    const cupons = await q(ctx.sb.from("vw_cupons_painel").select("*").in("id", ligados.map((l) => l.cupom_id))
+      .eq("status", "ativo").lte("inicio_em", agora).gt("fim_em", agora));
+    return melhorCupom(cupons.filter((c) => !c.demo || o.demo), Number(o.preco_promocional));
+  } catch { return null; }
+}
+
+async function precoNoPix(ctx, o) {
+  try {
+    const [p] = await q(ctx.sb.from("promocoes").select("preco_no_pix").eq("id", o.id));
+    return !!p?.preco_no_pix;
+  } catch { return false; }  // coluna ainda não criada: sem a indicação
+}
+
 function abrirStory(ctx, o) {
   if (!o) return;
   janelaStory(ctx, {
-    desenhar: (cores) => desenharStory(o, cores),
+    desenhar: async (cores) => {
+      const [cupom, pix] = await Promise.all([cupomDaOferta(ctx, o), precoNoPix(ctx, o)]);
+      return desenharStory({ ...o, cupom, preco_no_pix: pix }, cores);
+    },
     nome: `story-${o.id}.jpg`,
     link: linkDoStory(o),
     nota: o.link_validado ? "" : "Este link ainda não foi conferido pelo bot; os cliques do story não entram nas estatísticas.",

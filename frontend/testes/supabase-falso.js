@@ -93,7 +93,7 @@ const DADOS = {
     { promocao_id: 11, decidido_em: agora, selecionada: false, posicao: null, prioridade: 40, receita_esperada: null,
       detalhes: { resumo: "Recusada: mesmo produto (mesmo GTIN, confiança alta) mais barato em mercado_livre", fatores: [], avisos: [], sem_dados: [] } },
   ],
-  promocoes: [],
+  promocoes: [{ id: 13, preco_no_pix: true }],
   vw_cupons_painel: [
     { id: 41, marketplace_id: 1, marketplace_codigo: "shopee", marketplace_nome: "Shopee", tipo: "cupom", origem: "manual", titulo: "Cupom de fim de semana",
       codigo: "ACHADO15", desconto_tipo: "percentual", desconto_valor: 15, valor_minimo: 79, desconto_maximo: 30, link_afiliado: null,
@@ -102,9 +102,14 @@ const DADOS = {
     { id: 42, marketplace_id: 1, marketplace_codigo: "shopee", marketplace_nome: "Shopee", tipo: "campanha", origem: "automatica", titulo: "Semana do Frete Grátis",
       codigo: null, desconto_tipo: null, desconto_valor: null, link_afiliado: "https://s.shopee.com.br/F1", fim_em: new Date(Date.now() + 86400000).toISOString(),
       status: "ativo", demo: false, produtos_aprovados: 0, sugestoes: 0, publicacoes: 0, ultima_publicacao: null },
+    { id: 43, marketplace_id: 2, marketplace_codigo: "mercado_livre", marketplace_nome: "Mercado Livre", tipo: "cupom", origem: "manual",
+      titulo: "Cupom por seguir a loja", codigo: null, desconto_tipo: "valor", desconto_valor: 31.88, valor_minimo: null, desconto_maximo: null,
+      link_afiliado: null, regras: null, inicio_em: new Date(Date.now() - 86400000).toISOString(), fim_em: new Date(Date.now() + 86400000).toISOString(),
+      status: "ativo", demo: false, produtos_aprovados: 1, sugestoes: 0, publicacoes: 0, ultima_publicacao: null },
   ],
   cupons_produtos: [
     { cupom_id: 41, promocao_id: 12, origem: "manual", aprovado: true, motivo: null },
+    { cupom_id: 43, promocao_id: 13, origem: "manual", aprovado: true, motivo: null },
     { cupom_id: 41, promocao_id: 11, origem: "sugestao", aprovado: false, motivo: "título contém: fone" },
   ],
 };

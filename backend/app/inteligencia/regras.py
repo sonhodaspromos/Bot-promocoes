@@ -41,6 +41,7 @@ class Regras:
     bloquear_desconto_artificial: bool = True    # "sobe e desce" detectado com histórico suficiente = bloqueio
     historico_cobertura_minima_pct: float = 80.0 # % da janela observada para tirar conclusões
     alta_artificial_pct: float = 15.0            # alta recente acima do típico de 90 dias que caracteriza "sobe e desce"
+    aceitar_preco_pagina: bool = True            # "preço de" riscado lido pelo bot na página da loja conta como comprovado
 
     @property
     def pesos(self) -> dict[str, float]:
@@ -75,6 +76,7 @@ class Regras:
             exigir_imagem=bool(exigir) if exigir is not None else False,
             janela_repeticao_horas=_num(cfg, p + "janela_repeticao_horas", 24),
             exigir_desconto_comprovado=bool(cfg.get(p + "exigir_desconto_comprovado") or False),
+            aceitar_preco_pagina=cfg.get(p + "aceitar_preco_pagina") is not False,
             variacao_preco_max_pct=_num(cfg, p + "variacao_preco_max_pct", 5),
             bloquear_desconto_artificial=cfg.get(p + "bloquear_desconto_artificial") is not False,
             historico_cobertura_minima_pct=_num(cfg, p + "historico_cobertura_minima_pct", 80),

@@ -501,7 +501,15 @@ class SupabaseRepositorio(Repositorio):
         linhas = self._get("vw_promocoes_painel", id=f"eq.{promocao_id}", select=(
             "id,status,titulo,imagem_url,preco_promocional,preco_referencia,desconto_pct,marketplace,"
             "marketplace_nome,link_id,link_validado,demo,pontuacao,classificacao,analise,produto_id"))
-        return linhas[0] if linhas else None
+        if not linhas:
+            return None
+        dados = linhas[0]
+        try:  # preço no Pix (migration 027); sem a coluna, publica sem a indicação
+            extra = self._get("promocoes", id=f"eq.{promocao_id}", select="preco_no_pix")
+            dados["preco_no_pix"] = bool(extra and extra[0].get("preco_no_pix"))
+        except ErroBanco:
+            dados["preco_no_pix"] = False
+        return dados
 
     def registrar_publicacao(self, item, sucesso, id_mensagem, erro, extras=None):
         corpo = {"fila_id": item.id, "promocao_id": item.promocao_id, "canal_id": item.canal_id,
@@ -534,7 +542,7 @@ class SupabaseRepositorio(Repositorio):
     def promocoes_para_analisar(self, limite):
         linhas = self._get(
             "promocoes",
-            select="id,status,origem,demo,preco_promocional,preco_referencia,comissao_pct,produto_id,"
+            select="id,status,origem,demo,preco_promocional,preco_referencia,referencia_origem,comissao_pct,produto_id,"
                    "produtos!inner(titulo,preco_atual,disponivel,nota,total_vendas,imagem_url,categoria_id,"
                    "preco_maximo_variacao,referencia_derivada,categorias(ativa),marketplaces!inner(codigo,modo))",
             status="in.(encontrada,aprovada,publicada)", analisada_em="is.null", order="criado_em.asc", limit=str(limite))
@@ -552,6 +560,7 @@ class SupabaseRepositorio(Repositorio):
                 "promocao_id": x["id"], "produto_id": x["produto_id"], "status": x["status"], "origem": x["origem"],
                 "demo": x["demo"], "preco": float(x["preco_promocional"]),
                 "preco_referencia": float(x["preco_referencia"]) if x["preco_referencia"] is not None else None,
+                "referencia_origem": x.get("referencia_origem"),
                 "comissao_pct": float(x["comissao_pct"]) if x["comissao_pct"] is not None else None,
                 "titulo": p["titulo"], "preco_produto": float(p["preco_atual"]), "disponivel": p["disponivel"],
                 "nota": float(p["nota"]) if p["nota"] is not None else None, "total_vendas": p["total_vendas"],

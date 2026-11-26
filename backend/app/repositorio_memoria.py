@@ -134,7 +134,8 @@ class MemoriaRepositorio(Repositorio):
               "preco_referencia": oferta.preco_original, "desconto_pct": oferta.desconto_pct, "status": status,
               "origem": origem, "demo": prod["demo"] or origem == "demo", "motivo_status": None,
               "publicada_em": None, "pausada_em": None, "criado_em": self.relogio(), "comissao_pct": oferta.comissao_pct,
-              "pontuacao": None, "classificacao": None, "confianca": None, "analise": None, "analisada_em": None}
+              "pontuacao": None, "classificacao": None, "confianca": None, "analise": None, "analisada_em": None,
+              "referencia_origem": ("loja" if oferta.preco_original else None), "preco_no_pix": False}
         self.t["promocoes"].append(pr)
         return pr["id"]
 
@@ -213,6 +214,7 @@ class MemoriaRepositorio(Repositorio):
                 "link_id": link["id"] if link else None, "link_validado": bool(link), "demo": pr["demo"],
                 "origem": pr["origem"], "publicada_em": pr["publicada_em"], "produto_id": prod["id"],
                 "pontuacao": pr.get("pontuacao"), "classificacao": pr.get("classificacao"), "analise": pr.get("analise"),
+                "preco_no_pix": bool(pr.get("preco_no_pix")),
                 "categoria_id": prod.get("categoria_id")}
 
     def promocoes_para_enfileirar(self, limite):
@@ -381,6 +383,7 @@ class MemoriaRepositorio(Repositorio):
             saida.append({
                 "promocao_id": pr["id"], "produto_id": prod["id"], "status": pr["status"], "origem": pr["origem"],
                 "demo": pr["demo"], "preco": pr["preco_promocional"], "preco_referencia": pr["preco_referencia"],
+                "referencia_origem": pr.get("referencia_origem"),
                 "comissao_pct": pr.get("comissao_pct"), "titulo": prod["titulo"], "preco_produto": prod["preco_atual"],
                 "disponivel": prod["disponivel"], "nota": prod.get("nota"), "total_vendas": prod.get("total_vendas"),
                 "imagem_url": prod.get("imagem_url"), "categoria_ativa": cat["ativa"] if cat else None,
