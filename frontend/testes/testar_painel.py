@@ -84,6 +84,24 @@ async def main():
         checar("campanha oficial (automática)" in lista and "Remover" not in await pg.inner_text("#cupom-42"),
                "cupons: campanha automática aparece e não pode ser removida pelo painel")
         checar(await pg.locator("#c-lista b", has_text="selecionados").count() == 0, "cupons: regras com HTML aparecem como texto")
+        await pg.click('#cupom-41 [data-acao="story"]')
+        await pg.wait_for_selector(".janela-story img", timeout=8000); await pg.wait_for_timeout(300)
+        info = await pg.evaluate("""() => { const i = document.querySelector('.janela-story img'); const c = document.createElement('canvas');
+            c.width = i.naturalWidth; c.height = i.naturalHeight; c.getContext('2d').drawImage(i, 0, 0);
+            const px = (a, b) => [...c.getContext('2d').getImageData(a, b, 1, 1).data];
+            return { w: i.naturalWidth, h: i.naturalHeight, topo: px(540, 60), base: px(540, 1860), cartao: px(150, 960) }; }""")
+        rosa = lambda p: p[0] > 220 and p[2] > 150 and p[1] < 200
+        checar(info["w"] == 1080 and info["h"] == 1920 and rosa(info["topo"]) and rosa(info["base"]) and min(info["cartao"][:3]) > 240,
+               "story do cupom: fundo de cupons (padrão em cima e embaixo, cartão branco no meio)")
+        janela = await pg.inner_text(".janela-story")
+        checar("Copiar link" not in janela and "só o código" in janela, "story do cupom: sem link de afiliado, avisa que divulga só o código")
+        await pg.screenshot(path=CAPTURAS / "dono_story_cupom.png")
+        await pg.click('.janela-story [data-x="fechar"]'); await pg.wait_for_timeout(200)
+        await pg.evaluate("navigator.clipboard.writeText = async (t) => { window.__copiado = t; }")
+        await pg.click('#cupom-42 [data-acao="story"]'); await pg.wait_for_selector(".janela-story img", timeout=8000)
+        await pg.click('.janela-story [data-x="copiar"]'); await pg.wait_for_timeout(200)
+        checar(await pg.evaluate("window.__copiado") == "https://s.shopee.com.br/F1", "story da campanha: copia o link de afiliado")
+        await pg.click('.janela-story [data-x="fechar"]'); await pg.wait_for_timeout(200)
         await pg.click('#cupom-41 [data-acao="produtos"]'); await pg.wait_for_timeout(400)
         prod = await pg.inner_text("#prod-41")
         checar("vale o cupom" in prod and "sugestão do bot" in prod, "cupons: separa produto confirmado de sugestão")

@@ -2,6 +2,9 @@
 // O bot publica cada cupom válido 1 vez por dia nos stories (e no Telegram, se ligado em Ajustes).
 import { q } from "../api.js";
 import { $, $$, aviso, brl, dataHora, esc, numero } from "../ui.js";
+import { desenharStoryCupom, janelaStory } from "../story.js";
+
+let carregados = new Map();
 
 let filtro = "ativo";
 const ROTULO = { ativo: "Ativos", pausado: "Pausados", expirado: "Vencidos" };
@@ -9,8 +12,8 @@ const ROTULO = { ativo: "Ativos", pausado: "Pausados", expirado: "Vencidos" };
 export async function montar(el, ctx) {
   el.innerHTML = `
     <h2>Cupons e campanhas</h2>
-    <p class="muted">Cada cupom válido vai para os stories <b>1 vez por dia</b> até vencer. Campanhas da Shopee entram
-      sozinhas. Cupons com código você cadastra aqui: nenhuma loja oferece cupons por API.</p>
+    <p class="muted">Cada cupom válido vai para o Telegram <b>1 vez por dia</b> até vencer. Para os stories, toque em
+      <b>📲 Story</b> e poste você mesma, com o adesivo de link. Campanhas da Shopee entram sozinhas; cupons com código você cadastra aqui.</p>
     ${ctx.podeEditar ? '<button class="b p grande" id="c-novo" style="margin-bottom:12px">➕ Novo cupom</button>' : ""}
     <div id="c-form"></div>
     <div class="chips" id="c-filtro">${Object.entries(ROTULO).map(([v, t]) =>
@@ -20,7 +23,10 @@ export async function montar(el, ctx) {
   $("#c-novo", el)?.addEventListener("click", () => formulario(el, ctx));
   $("#c-lista", el).addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-acao]");
-    if (b) acao(el, ctx, b.dataset);
+    if (b?.dataset.acao === "story") {
+      const c = carregados.get(String(b.dataset.id));
+      if (c) janelaStory(ctx, { desenhar: (cores) => desenharStoryCupom(c, cores), nome: `cupom-${c.id}.jpg`, link: c.link_afiliado || "" });
+    } else if (b) acao(el, ctx, b.dataset);
   });
   await carregar(el, ctx);
 }
@@ -31,6 +37,7 @@ async function carregar(el, ctx) {
     $("#c-lista", el).innerHTML = `<div class="card muted">Nenhum cupom ${ROTULO[filtro].toLowerCase()}.</div>`;
     return;
   }
+  carregados = new Map(cupons.map((c) => [String(c.id), c]));
   $("#c-lista", el).innerHTML = cupons.map((c) => cartao(c, ctx)).join("");
 }
 
@@ -47,6 +54,7 @@ function cartao(c, ctx) {
   const automatica = c.origem === "automatica";
   const acoes = !ctx.podeEditar ? "" : `
     <div class="acoes">
+      ${c.status === "ativo" ? `<button class="b p" data-acao="story" data-id="${c.id}">📲 Story</button>` : ""}
       ${c.status === "ativo" ? `<button class="b" data-acao="pausar" data-id="${c.id}">⏸ Pausar</button>` : ""}
       ${c.status === "pausado" ? `<button class="b ok" data-acao="reativar" data-id="${c.id}">▶ Reativar</button>` : ""}
       <button class="b" data-acao="produtos" data-id="${c.id}" data-mkt="${esc(c.marketplace_codigo)}" data-demo="${c.demo}">
