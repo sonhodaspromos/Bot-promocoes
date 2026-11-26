@@ -114,6 +114,26 @@ async def main():
         checar(any(any(f[0] == "is" and f[1] == "classificacao" for f in c.get("filtros", [])) for c in chamadas), "filtrar ofertas aguardando análise")
         await pg.screenshot(path=CAPTURAS / "dono_ofertas_motor.png", full_page=True)
         await pg.select_option("#f-classe", ""); await pg.select_option("#f-ordem", "recentes"); await pg.wait_for_timeout(300)
+        checar(await pg.locator('[data-acao="story"]').count() == 0, "story manual: botão não aparece em oferta aguardando aprovação")
+        await pg.click('#f-status .chip[data-s="aprovada"]'); await pg.wait_for_timeout(400)
+        await pg.evaluate("navigator.clipboard.writeText = async (t) => { window.__copiado = t; }")
+        await pg.click('[data-acao="story"] >> nth=0')
+        await pg.wait_for_selector(".janela-story img", timeout=8000); await pg.wait_for_timeout(300)
+        info = await pg.evaluate("""() => { const i = document.querySelector('.janela-story img'); const c = document.createElement('canvas');
+            c.width = i.naturalWidth; c.height = i.naturalHeight; const x = c.getContext('2d'); x.drawImage(i, 0, 0);
+            return { w: i.naturalWidth, h: i.naturalHeight, faixa: [...x.getImageData(540, 1450, 1, 1).data], cartao: [...x.getImageData(950, 1250, 1, 1).data] }; }""")
+        checar(info["w"] == 1080 and info["h"] == 1920, "story manual: arte 1080x1920")
+        checar(info["cartao"][:3] == [255, 255, 255] or min(info["cartao"][:3]) > 240, "story manual: cartão branco do produto")
+        checar(info["faixa"][0] > 230 and info["faixa"][1] < 140 and info["faixa"][2] > 160, "story manual: faixa rosa do fundo da marca aparece embaixo")
+        checar(await pg.locator(".janela-story", has_text="não liberou a foto").count() == 0, "story manual: sem aviso de foto quando a oferta não tem foto")
+        await pg.screenshot(path=CAPTURAS / "dono_story_manual.png")
+        await pg.click('.janela-story [data-x="copiar"]'); await pg.wait_for_timeout(200)
+        checar(await pg.evaluate("window.__copiado") == "https://supabase.falso/functions/v1/r?l=77&c=instagram_story"
+               or (await pg.evaluate("window.__copiado") or "").endswith("/functions/v1/r?l=77&c=instagram_story"),
+               "story manual: copia o link rastreado do story")
+        await pg.click('.janela-story [data-x="fechar"]'); await pg.wait_for_timeout(200)
+        checar(await pg.locator(".janela-story").count() == 0, "story manual: fecha a janela")
+        await pg.click('#f-status .chip[data-s="encontrada"]'); await pg.wait_for_timeout(400)
         await pg.click('[data-acao="aprovar"] >> nth=0'); await pg.wait_for_timeout(300)
         chamadas = await pg.evaluate("window.__chamadas")
         checar(any(c.get("tabela") == "promocoes" and c.get("operacao") == "update" and c["corpo"].get("status") == "aprovada" for c in chamadas),
