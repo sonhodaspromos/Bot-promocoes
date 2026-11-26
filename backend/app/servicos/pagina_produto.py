@@ -80,6 +80,15 @@ def _por_extenso(t: str) -> float | None:
     return numero_preco(f"{m.group(1).replace('.', '')}.{(m.group(2) or '0').zfill(2)}")
 
 
+def preco_no_pix(html: str) -> bool:
+    """O preço principal é o do Pix? ("X% OFF no Pix" ao lado do preço). Igual ao produto.ts."""
+    m = re.search(r"aria-label=[\"'](?:Agora[:\s]|\d[\d.]*\s*reais)", html, re.I)
+    trecho = html[m.start():m.start() + 4000] if m else ""
+    texto = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", trecho))
+    return bool(re.search(r"\b(?:OFF|desconto)\s+no\s+Pix\b", texto, re.I)
+                or re.search(r"aria-label=[\"'][^\"']*\bno Pix\b", trecho, re.I))
+
+
 def extrair_produto(html: str, url_final: str = "") -> dict:
     lds = _produtos_ld(html)
     ld = lds[0] if lds else {}
@@ -128,6 +137,7 @@ def extrair_produto(html: str, url_final: str = "") -> dict:
         titulo = re.sub(r"\s*\|\s*Mercado Livre.*$", "", titulo, flags=re.I)
         titulo = re.sub(r"\s*[-–|]\s*R\$\s*[\d.]+(?:,\d{1,2})?\s*$", "", titulo)[:300]
     return {"titulo": titulo, "imagem_url": imagem, "preco": preco, "preco_antigo": antigo,
+            "preco_pix": bool(preco) and preco_no_pix(html),
             "disponivel": disponivel, "id_externo": str(ident)[:120] if ident else None}
 
 

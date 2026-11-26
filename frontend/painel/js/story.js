@@ -65,7 +65,7 @@ export async function desenharStory(o, cores = {}) {
   retangulo(c, M, y0, L - M, y1, 40); c.fillStyle = "#fff"; c.fill();
   c.lineWidth = 6; c.strokeStyle = principal; c.stroke();
 
-  const area = L - 4 * M, altFoto = Math.round(area * 0.9);
+  const area = L - 4 * M, altFoto = Math.round(area * (o.cupom ? 0.66 : 0.74));
   let semFoto = !foto && /^https:\/\//.test(o.imagem_url || "");  // tinha foto, mas não carregou
   if (foto) {
     const esc = Math.min(area / foto.naturalWidth, altFoto / foto.naturalHeight);
@@ -99,23 +99,78 @@ export async function desenharStory(o, cores = {}) {
   }
 
   c.textAlign = "left"; c.textBaseline = "top";
-  let y = y0 + 40 + altFoto + 30;
-  c.font = "700 44px PoppinsArte, system-ui, sans-serif"; c.fillStyle = "#222";
-  for (const linha of quebrar(c, o.titulo, area, 3)) { c.fillText(linha, 2 * M, y); y += 56; }
-  y += 15;
-  if (o.preco_referencia && Number(o.preco_referencia) > Number(o.preco_promocional)) {
-    c.font = "400 40px PoppinsArte, system-ui, sans-serif"; c.fillStyle = "#888";
-    const t = `de ${brl(o.preco_referencia)}`;
-    c.fillText(t, 2 * M, y);
-    const ini = 2 * M + c.measureText("de ").width, fim = 2 * M + c.measureText(t).width;
-    c.fillRect(ini, y + 26, fim - ini, 4);
-    y += 50;
+  let y = y0 + 40 + altFoto + 26;
+  c.font = "700 42px PoppinsArte, system-ui, sans-serif"; c.fillStyle = "#222";
+  for (const linha of quebrar(c, o.titulo, area, 2)) { c.fillText(linha, 2 * M, y); y += 54; }
+  y += 14;
+  const cupom = o.cupom || null;  // { codigo, preco_final } quando há cupom aprovado para a oferta
+  if (cupom) {  // chamada para o cupom, acima do preço final
+    const txt = cupom.codigo ? `Use o cupom ${cupom.codigo} 👇` : "Ative o cupom no anúncio 👇";
+    c.font = "700 44px PoppinsArte, system-ui, sans-serif";
+    retangulo(c, 2 * M, y, L - 2 * M, y + 76, 22); c.fillStyle = "#FDE4EF"; c.fill();
+    c.fillStyle = principal; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(txt, L / 2, y + 39);
+    c.textAlign = "left"; c.textBaseline = "top";
+    y += 92;
   }
-  c.font = "700 96px PoppinsArte, system-ui, sans-serif"; c.fillStyle = principal;
-  c.fillText(brl(o.preco_promocional), 2 * M, y);
-  c.font = "700 34px PoppinsArte, system-ui, sans-serif"; c.fillStyle = "#555";
-  c.fillText(String(o.marketplace_nome || "").slice(0, 30), 2 * M, y + 114);
+  if (o.preco_referencia && Number(o.preco_referencia) > Number(o.preco_promocional)) {
+    c.font = "400 38px PoppinsArte, system-ui, sans-serif"; c.fillStyle = "#888"; c.textAlign = "center";
+    const t = `de ${brl(o.preco_referencia)}`;
+    c.fillText(t, L / 2, y);
+    const w = c.measureText(t).width, ini = L / 2 - w / 2 + c.measureText("de ").width;
+    c.fillRect(ini, y + 24, L / 2 + w / 2 - ini, 4);
+    c.textAlign = "left";
+    y += 52;
+  }
+  // preço final em destaque: caixa cheia na cor da marca
+  const final = cupom ? cupom.preco_final : Number(o.preco_promocional);
+  const pix = o.preco_no_pix ? " no Pix" : "";
+  retangulo(c, 2 * M, y, L - 2 * M, y + 180, 36); c.fillStyle = principal; c.fill();
+  c.fillStyle = "#fff"; c.textBaseline = "middle";
+  let tam = 104;
+  const medir = () => { c.font = `700 ${tam}px PoppinsArte, system-ui, sans-serif`; const a = c.measureText(brl(final)).width;
+    c.font = `700 ${Math.round(tam * 0.42)}px PoppinsArte, system-ui, sans-serif`; return a + (pix ? c.measureText(pix).width + 10 : 0); };
+  while (medir() > area - 40 && tam > 60) tam -= 4;
+  const total = medir();
+  c.font = `700 ${tam}px PoppinsArte, system-ui, sans-serif`;
+  const x0 = L / 2 - total / 2;
+  c.textAlign = "left"; c.fillText(brl(final), x0, y + 92);
+  if (pix) {
+    const xp = x0 + c.measureText(brl(final)).width + 10;
+    c.font = `700 ${Math.round(tam * 0.42)}px PoppinsArte, system-ui, sans-serif`; c.fillText(pix.trim(), xp, y + 110);
+  }
+  c.textBaseline = "top";
+  y += 196;
+  c.textAlign = "center";
+  if (cupom) {
+    c.font = "400 34px PoppinsArte, system-ui, sans-serif"; c.fillStyle = "#555";
+    c.fillText(`sem cupom: ${brl(o.preco_promocional)}${pix}`, L / 2, y); y += 46;
+  }
+  c.font = "700 32px PoppinsArte, system-ui, sans-serif"; c.fillStyle = "#555";
+  c.fillText(String(o.marketplace_nome || "").slice(0, 30), L / 2, y);
+  c.textAlign = "left";
   return { canvas: cv, semFoto };
+}
+
+/** Mesmo cálculo do backend (Cupom.desconto_em): percentual com teto, valor fixo, compra mínima. */
+export function precoComCupom(c, preco) {
+  const v = Number(c.desconto_valor);
+  if (!c.desconto_tipo || !v || preco <= 0) return null;
+  if (c.valor_minimo && preco < Number(c.valor_minimo)) return null;
+  let d = c.desconto_tipo === "percentual" ? preco * v / 100 : v;
+  if (c.desconto_tipo === "percentual" && c.desconto_maximo) d = Math.min(d, Number(c.desconto_maximo));
+  d = Math.round(Math.min(d, preco - 0.01) * 100) / 100;
+  return d > 0 ? Math.round((preco - d) * 100) / 100 : null;
+}
+
+/** O cupom aprovado (com código, ou sem código ativado na página) que deixa a oferta mais barata. */
+export function melhorCupom(cupons, preco) {
+  let melhor = null;
+  for (const c of cupons) {
+    if (!c.codigo && c.tipo !== "cupom") continue;
+    const f = precoComCupom(c, preco);
+    if (f !== null && (!melhor || f < melhor.preco_final)) melhor = { codigo: c.codigo || null, preco_final: f };
+  }
+  return melhor;
 }
 
 /** Link para o adesivo: o rastreado (conta os cliques do story) quando o link já foi validado pelo bot. */
@@ -194,7 +249,7 @@ export async function desenharStoryCupom(c, cores = {}) {
       y += 200;
     } else {
       x.font = "700 50px PoppinsArte, system-ui, sans-serif"; x.fillStyle = "#333";
-      x.fillText("desconto direto no link", L / 2, y); y += 100;
+      x.fillText(c.tipo === "cupom" ? "ative o cupom na página do produto" : "desconto direto no link", L / 2, y); y += 100;
     }
     const fim = c.fim_em ? new Date(c.fim_em) : null;
     if (fim && !isNaN(fim)) {

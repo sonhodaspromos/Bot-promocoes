@@ -512,6 +512,7 @@ class ServicoPublicacao:
             achado = None  # sem a tabela de cupons (migration 016 ausente): publica sem cupom
         if achado and (not achado[0].demo or dados.get("demo")):
             dados["cupom_codigo"], dados["preco_com_cupom"] = achado[0].codigo, achado[1]
+            dados["cupom_na_pagina"] = not achado[0].codigo  # cupom sem código: ativado na página do produto
         aplicar_desconto_da_analise(dados)
         # Amazon: a imagem do produto não é baixada nem re-hospedada na arte (regras de uso de conteúdo do
         # Programa de Associados); a arte sai com o fundo padrão.

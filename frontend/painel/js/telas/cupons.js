@@ -64,7 +64,7 @@ function cartao(c, ctx) {
   return `<div class="card cupom" id="cupom-${c.id}">
     <div class="m">${esc(c.marketplace_nome)} · ${automatica ? "campanha oficial (automática)" : "cadastrado por você"}
       ${c.demo ? '<span class="tag st-demo">DEMO</span>' : ""}</div>
-    ${c.codigo ? `<div class="codigo">${esc(c.codigo)}</div>` : ""}
+    ${c.codigo ? `<div class="codigo">${esc(c.codigo)}</div>` : (c.tipo === "cupom" ? '<div class="m">sem código · ativado na página do produto</div>' : "")}
     <div class="t">${esc(c.titulo)}</div>
     ${descricao(c) ? `<div class="preco">${esc(descricao(c))}</div>` : ""}
     <div class="m">Válido até ${dataHora(c.fim_em)}${c.regras ? ` · ${esc(c.regras)}` : ""}</div>
@@ -165,8 +165,8 @@ async function formulario(el, ctx) {
       <h3>Novo cupom</h3>
       <label for="cp-loja">Loja</label>
       <select id="cp-loja" required>${lojas.map((l) => `<option value="${l.id}">${esc(l.nome)}</option>`).join("")}</select>
-      <label for="cp-codigo">Código do cupom</label>
-      <input id="cp-codigo" required maxlength="30" autocapitalize="characters" placeholder="EX.: ACHADO15" pattern="[A-Za-z0-9_\\- ]{3,30}">
+      <label for="cp-codigo">Código do cupom <span class="m">(deixe vazio se o cupom é ativado na página, ex.: “cupom por seguir a loja”)</span></label>
+      <input id="cp-codigo" maxlength="30" autocapitalize="characters" placeholder="EX.: ACHADO15" pattern="[A-Za-z0-9_\\- ]{3,30}">
       <label for="cp-titulo">Nome que aparece no post</label>
       <input id="cp-titulo" required minlength="3" maxlength="120" placeholder="Ex.: Cupom de fim de semana">
       <div class="linha">
@@ -205,6 +205,9 @@ async function formulario(el, ctx) {
     const valor = numero($("#cp-valor", alvo).value);
     if (tipo && (!valor || valor <= 0)) return aviso("Informe o valor do desconto.", "erro");
     if (tipo === "percentual" && valor > 90) return aviso("Desconto acima de 90% não parece real. Confira o cupom.", "erro");
+    const codigo = $("#cp-codigo", alvo).value.trim().toUpperCase().replace(/\s+/g, "") || null;
+    if (!codigo && !tipo) return aviso("Cupom sem código precisa do valor do desconto (para o bot calcular o preço com cupom).", "erro");
+    if (codigo && !/^[A-Z0-9_-]{3,30}$/.test(codigo)) return aviso("O código deve ter de 3 a 30 letras, números, - ou _.", "erro");
     const fim = new Date($("#cp-fim", alvo).value);
     if (!(fim > new Date())) return aviso("A validade precisa ser no futuro.", "erro");
     const botao = $("#cp-salvar", alvo);
@@ -212,7 +215,7 @@ async function formulario(el, ctx) {
     try {
       await q(ctx.sb.from("cupons").insert({
         marketplace_id: Number($("#cp-loja", alvo).value), tipo: "cupom",
-        codigo: $("#cp-codigo", alvo).value.trim().toUpperCase().replace(/\s+/g, ""),
+        codigo,
         titulo: $("#cp-titulo", alvo).value.trim(), desconto_tipo: tipo, desconto_valor: tipo ? valor : null,
         valor_minimo: numero($("#cp-minimo", alvo).value), desconto_maximo: numero($("#cp-maximo", alvo).value),
         fim_em: fim.toISOString(), link_afiliado: $("#cp-link", alvo).value.trim() || null,
@@ -220,7 +223,7 @@ async function formulario(el, ctx) {
         categoria_id: $("#cp-cat", alvo).value ? Number($("#cp-cat", alvo).value) : null,
         regras: $("#cp-regras", alvo).value.trim() || null,
       }));
-      aviso("Cupom salvo ✔ ele entra nos stories a partir do horário dos cupons");
+      aviso("Cupom salvo ✔ ele vai para o Telegram a partir do horário dos cupons");
       alvo.innerHTML = "";
       filtro = "ativo";
       await montar(el, ctx);

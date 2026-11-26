@@ -6,8 +6,18 @@ export type DadosProduto = {
   imagem_url: string | null;
   preco: number | null;
   preco_antigo: number | null;
+  preco_pix: boolean;
   id_externo: string | null;
 };
+
+/** O preço principal da página é o do Pix? (o Mercado Livre escreve "X% OFF no Pix" ao lado do preço).
+ *  Só olha o trecho do preço principal, para não confundir com "pague no Pix" do rodapé. */
+export function precoNoPix(html: string): boolean {
+  const ancora = html.search(/aria-label=["'](?:Agora[:\s]|\d[\d.]*\s*reais)/i);
+  const trecho = ancora >= 0 ? html.slice(ancora, ancora + 4000) : "";
+  const texto = trecho.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  return /\b(?:OFF|desconto)\s+no\s+Pix\b/i.test(texto) || /aria-label=["'][^"']*\bno Pix\b/i.test(trecho);
+}
 
 /** O endereço pode ser aberto? Só https, sem usuário/senha, porta padrão, sem IP literal e com o domínio
  *  dentro da lista da loja (evita usar a função para acessar endereços internos ou de terceiros). */
@@ -115,6 +125,7 @@ export function extrairProduto(html: string, urlFinal = ""): DadosProduto {
     imagem_url: imagem,
     preco,
     preco_antigo: antigo,
+    preco_pix: preco !== null && precoNoPix(html),
     id_externo: id ? String(id).slice(0, 120) : null,
   };
 }

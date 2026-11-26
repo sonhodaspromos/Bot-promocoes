@@ -43,7 +43,8 @@ def legenda_telegram(d: dict, link: str, cfg: dict, variante: str = "A") -> str:
     linhas = []
     if d.get("demo"):
         linhas += ["🧪 <b>[DEMONSTRAÇÃO — não é uma oferta real]</b>", ""]
-    preco = f"💥 <b>Por: {reais(d['preco_promocional'])}</b>"
+    pix = " no Pix" if d.get("preco_no_pix") else ""
+    preco = f"💥 <b>Por: {reais(d['preco_promocional'])}{pix}</b>"
     if variante == "B":
         linhas += [preco, ""]
     linhas += [f"<b>{html.escape(headline(d, cfg))}</b>", "",
@@ -57,6 +58,8 @@ def legenda_telegram(d: dict, link: str, cfg: dict, variante: str = "A") -> str:
         linhas.append(preco)
     if d.get("cupom_codigo") and d.get("preco_com_cupom"):
         linhas.append(f"🎟 Com o cupom <code>{html.escape(d['cupom_codigo'])}</code>: <b>{reais(d['preco_com_cupom'])}</b>")
+    elif d.get("cupom_na_pagina") and d.get("preco_com_cupom"):
+        linhas.append(f"🎟 Com o cupom da loja: <b>{reais(d['preco_com_cupom'])}</b> (ative o cupom na página do produto)")
     linhas += ["", "🛒 <b>Compre aqui:</b>", html.escape(link), "",
                "⚠️ <b>Promoção sujeita à alteração de preço e estoque do site</b>"]
     if cfg.get("transparencia.marcar_publi", True):  # no Telegram, só o #publi (a dona pediu sem o aviso de comissão)
@@ -85,6 +88,8 @@ def legenda_instagram(d: dict, cfg: dict, destaque: bool, variante: str = "A") -
         linhas.append(preco)
     if d.get("cupom_codigo") and d.get("preco_com_cupom"):
         linhas.append(f"🎟 Com o cupom {d['cupom_codigo']}: {reais(d['preco_com_cupom'])}")
+    elif d.get("cupom_na_pagina") and d.get("preco_com_cupom"):
+        linhas.append(f"🎟 Com o cupom da loja: {reais(d['preco_com_cupom'])} (ative na página do produto)")
     linhas += ["", cfg.get("textos.chamada_instagram") or ""]
     if cfg.get("transparencia.aviso_afiliado"):
         linhas.append(cfg["transparencia.aviso_afiliado"])
@@ -112,6 +117,8 @@ def legenda_cupom_telegram(c, cfg: dict) -> str:
         linhas.append(f"💸 {html.escape(c.descricao())}")
     if c.codigo:
         linhas.append(f"🔑 Código: <code>{html.escape(c.codigo)}</code> (toque para copiar e use no pagamento)")
+    elif c.tipo == "cupom":
+        linhas.append("🔑 Sem código: ative o cupom na página do produto")
     linhas.append(f"⏰ Válido até {_validade(c, cfg)}")
     if c.regras:
         linhas.append(f"ℹ️ {html.escape(c.regras)}")
@@ -129,6 +136,8 @@ def legenda_cupom_instagram(c, cfg: dict) -> str:
         linhas.append(c.descricao())
     if c.codigo:
         linhas.append(f"Código: {c.codigo}")
+    elif c.tipo == "cupom":
+        linhas.append("Sem código: ative o cupom na página do produto")
     linhas += [f"Válido até {_validade(c, cfg)}", "", cfg.get("textos.chamada_instagram") or ""]
     if cfg.get("transparencia.aviso_afiliado"):
         linhas.append(cfg["transparencia.aviso_afiliado"])

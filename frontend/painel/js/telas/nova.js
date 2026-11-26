@@ -24,13 +24,17 @@ export async function montar(el, ctx) {
         <div><label for="n-preco">Preço (R$)</label><input id="n-preco" inputmode="decimal" placeholder="99,90" required></div>
         <div><label for="n-antigo">Preço antigo (opcional)</label><input id="n-antigo" inputmode="decimal" placeholder="149,90"></div>
       </div>
+      <label class="sw" style="color:var(--tx)"><span>Esse preço é no Pix</span>
+        <span class="tg"><input type="checkbox" id="n-pix"><span></span></span></label>
+      <p class="ajuda" id="n-ajuda-antigo">Preço antigo lido da página da loja pelo “Puxar dados” aparece no post como “De … Por …”.
+        Digitado à mão, só aparece depois que o histórico de preços do bot confirmar.</p>
       <label for="n-cat">Categoria</label>
       <select id="n-cat"><option value="">Sem categoria</option>${categorias.map((c) => `<option value="${c.id}">${esc(c.nome)}</option>`).join("")}</select>
       <label for="n-img">Link da foto (opcional)</label><input id="n-img" type="url" inputmode="url" placeholder="https://…">
       <label for="n-id">Código do produto na loja (opcional)</label><input id="n-id" maxlength="120" placeholder="ex.: MLB123456789">
       <p class="ajuda">Com o código, o sistema evita cadastrar o mesmo produto duas vezes.</p>
       <label class="sw" style="color:var(--tx)"><span>Publicar agora (sem esperar a próxima rodada)</span>
-        <span class="tg"><input type="checkbox" id="n-agora" checked><span></span></span></label>
+        <span class="tg"><input type="checkbox" id="n-agora"><span></span></span></label>
       <p></p><button class="b p grande" type="submit" id="n-salvar">Salvar oferta</button>
     </form>`;
 
@@ -42,6 +46,7 @@ export async function montar(el, ctx) {
   mostrarDominios();
 
   const moeda = (v) => (v ? Number(v).toFixed(2).replace(".", ",") : "");
+  let antigoDaPagina = null;  // preço riscado lido da página: só conta como "da loja" se ninguém mexer no campo
   $("#n-puxar", el).addEventListener("click", async () => {
     const link = $("#n-link", el).value.trim();
     if (!/^https:\/\//i.test(link)) return aviso("Cole primeiro o link de afiliado.", "erro");
@@ -52,6 +57,8 @@ export async function montar(el, ctx) {
       if (d.titulo) $("#n-titulo", el).value = d.titulo;
       if (d.preco) $("#n-preco", el).value = moeda(d.preco);
       $("#n-antigo", el).value = moeda(d.preco_antigo);
+      antigoDaPagina = d.preco_antigo ? Number(d.preco_antigo) : null;
+      $("#n-pix", el).checked = !!d.preco_pix;
       if (/^https:\/\//.test(d.imagem_url || "")) $("#n-img", el).value = d.imagem_url;
       if (d.id_externo) $("#n-id", el).value = d.id_externo;
       const foto = /^https:\/\//.test(d.imagem_url || "") ? `<img src="${esc(d.imagem_url)}" alt="" referrerpolicy="no-referrer">` : '<div class="sem-foto"></div>';
@@ -77,6 +84,8 @@ export async function montar(el, ctx) {
         p_link: $("#n-link", el).value.trim(), p_preco_antigo: numero($("#n-antigo", el).value),
         p_categoria_id: $("#n-cat", el).value ? Number($("#n-cat", el).value) : null,
         p_imagem_url: $("#n-img", el).value.trim() || null, p_id_externo: $("#n-id", el).value.trim() || null,
+        p_referencia_da_pagina: antigoDaPagina !== null && numero($("#n-antigo", el).value) === antigoDaPagina,
+        p_preco_pix: $("#n-pix", el).checked,
       }));
       let msg = "Oferta salva ✔ o link será validado na próxima rodada (até 10 min).";
       if ($("#n-agora", el).checked) {
@@ -85,6 +94,7 @@ export async function montar(el, ctx) {
       }
       aviso(msg);
       ["#n-link", "#n-titulo", "#n-preco", "#n-antigo", "#n-img", "#n-id"].forEach((s) => ($(s, el).value = ""));
+      $("#n-pix", el).checked = false; antigoDaPagina = null;
       $("#n-previa", el).classList.add("hide");
     } catch (e) { aviso(e.message, "erro"); }
     botao.disabled = false;

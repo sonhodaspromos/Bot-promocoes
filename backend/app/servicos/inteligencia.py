@@ -93,7 +93,7 @@ class ServicoInteligencia:
                 origem_loja = "manual" if it.get("origem") == "manual" else "loja"
                 preco, preco_produto = it["preco"], it.get("preco_produto")
                 referencia = it.get("preco_referencia")
-                origem_ref = origem_loja if referencia else None
+                origem_ref = ("pagina" if it.get("referencia_origem") == "pagina" else origem_loja) if referencia else None
                 cupom = self._cupom(it, melhor_cupom)
                 if cupom:
                     # com cupom: o preço final é o da loja menos o desconto do cupom (regras do próprio cupom)

@@ -84,6 +84,16 @@ async def main():
         checar("campanha oficial (automática)" in lista and "Remover" not in await pg.inner_text("#cupom-42"),
                "cupons: campanha automática aparece e não pode ser removida pelo painel")
         checar(await pg.locator("#c-lista b", has_text="selecionados").count() == 0, "cupons: regras com HTML aparecem como texto")
+        checar("sem código · ativado na página" in await pg.inner_text("#cupom-43"), "cupons: cupom sem código aparece como 'ativado na página'")
+        calc = await pg.evaluate("""async () => { const m = await import('/painel/js/story.js');
+            return [m.precoComCupom({desconto_tipo:'valor', desconto_valor:31.88}, 318.72),
+                    m.precoComCupom({desconto_tipo:'percentual', desconto_valor:15, desconto_maximo:30}, 318.72),
+                    m.precoComCupom({desconto_tipo:'percentual', desconto_valor:15, valor_minimo:400}, 318.72),
+                    m.melhorCupom([{codigo:null, tipo:'cupom', desconto_tipo:'valor', desconto_valor:31.88},
+                                   {codigo:'X10', tipo:'cupom', desconto_tipo:'percentual', desconto_valor:5}], 318.72),
+                    m.melhorCupom([{codigo:null, tipo:'campanha', desconto_tipo:'valor', desconto_valor:50}], 318.72)]; }""")
+        checar(calc == [286.84, 288.72, None, {"codigo": None, "preco_final": 286.84}, None],
+               "cupom no story: mesmo cálculo do bot (valor, % com teto, mínimo, melhor cupom, campanha sem código fora)")
         await pg.click('#cupom-41 [data-acao="story"]')
         await pg.wait_for_selector(".janela-story img", timeout=8000); await pg.wait_for_timeout(300)
         info = await pg.evaluate("""() => { const i = document.querySelector('.janela-story img'); const c = document.createElement('canvas');
@@ -175,15 +185,25 @@ async def main():
                and await pg.input_value("#n-id") == "MLB123456789", "puxar dados: preenche título, preços, foto e código")
         checar(await pg.locator("#n-previa b", has_text="Perfume").count() == 1 and await pg.locator("#n-previa b b").count() == 0,
                "puxar dados: prévia mostra o produto sem injetar HTML")
+        checar(await pg.is_checked("#n-pix"), "puxar dados: marca 'preço no Pix' quando a página indica")
         await pg.fill("#n-link", "https://www.mercadolivre.com.br/produto")
         await pg.fill("#n-titulo", "Air Fryer"); await pg.fill("#n-preco", "299,90")
         await pg.click("#n-salvar"); await pg.wait_for_timeout(300)
         checar("não é um link de afiliado" in await pg.inner_text("#toast"), "link fora do domínio de afiliado é recusado com mensagem clara")
         await pg.fill("#n-link", "https://mercadolivre.com/sec/abc"); await pg.fill("#n-titulo", "Air Fryer"); await pg.fill("#n-preco", "299,90")
         await pg.click("#n-salvar"); await pg.wait_for_timeout(400)
-        checar("Oferta salva" in await pg.inner_text("#toast"), "oferta manual salva e 'publicar agora' disparado")
+        checar("Oferta salva" in await pg.inner_text("#toast"), "oferta manual salva")
         chamadas = await pg.evaluate("window.__chamadas")
         checar(any(c.get("rpc") == "cadastrar_oferta_manual" and c["args"]["p_preco"] == 299.9 for c in chamadas), "preço '299,90' enviado como 299.9")
+        ult = [c for c in chamadas if c.get("rpc") == "cadastrar_oferta_manual"][-1]["args"]
+        checar(ult["p_referencia_da_pagina"] is True and ult["p_preco_pix"] is True and ult["p_preco_antigo"] == 419.9,
+               "preço antigo lido da página vai marcado como 'da página' e o Pix junto")
+        await pg.fill("#n-link", "https://mercadolivre.com/sec/def"); await pg.fill("#n-titulo", "Outro produto")
+        await pg.fill("#n-preco", "100,00"); await pg.fill("#n-antigo", "150,00")
+        await pg.click("#n-salvar"); await pg.wait_for_timeout(400)
+        ult = [c for c in await pg.evaluate("window.__chamadas") if c.get("rpc") == "cadastrar_oferta_manual"][-1]["args"]
+        checar(ult["p_referencia_da_pagina"] is False and ult["p_preco_pix"] is False,
+               "preço antigo digitado à mão não vai como 'da página' (e o Pix volta desmarcado)")
         await pg.click('nav button[data-tela="ajustes"]'); await pg.wait_for_timeout(300)
         checar(await pg.locator("text=Credenciais (cifradas no cofre)").count() == 1, "dono vê a área de credenciais")
         checar(await pg.locator("text=••••a1b2").count() == 1, "credencial mostra só os 4 últimos caracteres")

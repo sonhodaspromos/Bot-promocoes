@@ -231,10 +231,12 @@ class ServicoCupons:
 
 
 def melhor_cupom(cupons: list[Cupom], preco: float) -> tuple[Cupom, float] | None:
-    """O cupom (com código) que deixa o produto mais barato, e o preço final. Nada é estimado."""
+    """O cupom que deixa o produto mais barato, e o preço final. Nada é estimado.
+    Vale cupom com código ou cupom sem código ativado na página (ex.: "cupom por seguir a loja");
+    campanha sem código não entra (não tem desconto aplicável a um produto)."""
     melhor = None
     for c in cupons:
-        if not c.codigo:
+        if not c.codigo and c.tipo != "cupom":
             continue
         final = c.preco_com_cupom(preco)
         if final is not None and (melhor is None or final < melhor[1]):
