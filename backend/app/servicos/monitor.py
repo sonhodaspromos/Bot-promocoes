@@ -2,7 +2,7 @@
 
 Quando a loja tem API (Shopee), consulta preço e estoque; o banco pausa a oferta sozinho se o
 preço subir além da tolerância ou o produto esgotar. Sem API (Mercado Livre), lê a página pública do
-produto uma vez por dia (monitor.intervalo_pagina_horas) e atualiza preço/estoque do mesmo jeito; se a
+produto a cada 6 h (monitor.intervalo_pagina_horas) e atualiza preço/estoque do mesmo jeito; se a
 página não deixar ler o preço, ao menos confere se o link abre. Link quebrado é invalidado e o banco pausa.
 """
 from __future__ import annotations
@@ -77,7 +77,7 @@ class ServicoMonitor:
         """True = resolvido pela leitura da página (atualizou o preço ou invalidou o link).
         False = ainda não é hora (conferida há menos de monitor.intervalo_pagina_horas) ou não deu para ler o
         preço: segue a conferência simples do link, como antes."""
-        horas = float(cfg.get("monitor.intervalo_pagina_horas") or 24)
+        horas = float(cfg.get("monitor.intervalo_pagina_horas") or 6)
         if _recente(it.get("verificado_em"), horas, self.relogio()):
             return False
         dominios = list(it.get("dominios") or []) + list(it.get("dominios_destino") or [])

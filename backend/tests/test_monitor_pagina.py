@@ -64,10 +64,10 @@ def test_preco_igual_mantem_publicada_e_marca_a_conferencia():
 
 
 def test_so_le_a_pagina_uma_vez_por_dia():
-    repo, pid, promo, _ = cenario(verificado=AGORA - timedelta(hours=3))
+    repo, pid, promo, _ = cenario(verificado=AGORA - timedelta(hours=3))  # intervalo padrão: 6 h
     s = redireciona_para_produto()
     monitor(repo, s).executar(repo.configuracoes())
-    assert repo._um("produtos", id=pid)["preco_atual"] == 276.44          # não atualizou (conferido há 3 h)
+    assert repo._um("produtos", id=pid)["preco_atual"] == 276.44          # não atualizou (conferido há 3 h, intervalo de 6 h)
     assert repo._um("promocoes", id=promo)["status"] == "publicada"
 
 

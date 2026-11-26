@@ -22,7 +22,7 @@ CONFIG_PADRAO = {
     "publicacao.feed_horario": 19, "filtros.desconto_minimo": 20, "filtros.nota_minima": 4.5,
     "filtros.repetir_apos_dias": 30, "monitor.ativo": True, "monitor.tolerancia_preco_pct": 5,
     "monitor.acompanhar_dias": 7, "monitor.verificar_links": True,
-    "monitor.ler_preco_pagina": True, "monitor.intervalo_pagina_horas": 24, "transparencia.marcar_publi": True,
+    "monitor.ler_preco_pagina": True, "monitor.intervalo_pagina_horas": 6, "transparencia.marcar_publi": True,
     "transparencia.aviso_afiliado": "Link de afiliado: posso ganhar comissão, sem custo extra para você.",
     "textos.chamada_instagram": "🔗 Link no nosso canal do Telegram (link na bio)",
     "textos.rodape_story": "Link no canal do Telegram", "textos.hashtags": "#achadinhos #promoção",
