@@ -9,6 +9,15 @@ values ('monitor.conferir_fila', 'true', 'booleano',
         'Conferir também o preço das ofertas na fila (antes de publicar), no mesmo intervalo das publicadas', null, null)
 on conflict (chave) do nothing;
 
+-- preços acompanhados "o tempo todo": intervalo mínimo de 1 h (padrão passa de 6 h para 1 h), publicadas
+-- acompanhadas por 30 dias (antes 7) e até 30 ofertas por rodada em cada grupo (publicadas e fila)
+insert into public.configuracoes (chave, valor, tipo, descricao, minimo, maximo)
+values ('monitor.max_por_rodada', '30', 'numero', 'Quantas ofertas conferir por rodada (publicadas e fila, cada grupo)', 1, 200)
+on conflict (chave) do nothing;
+update public.configuracoes set minimo = 1 where chave = 'monitor.intervalo_pagina_horas';
+update public.configuracoes set valor = '1' where chave = 'monitor.intervalo_pagina_horas' and valor = '6'::jsonb;
+update public.configuracoes set valor = '30' where chave = 'monitor.acompanhar_dias' and valor = '7'::jsonb;
+
 create or replace function public.republicar_oferta(
   p_promocao bigint, p_preco numeric, p_preco_antigo numeric default null,
   p_referencia_da_pagina boolean default false, p_preco_pix boolean default false)

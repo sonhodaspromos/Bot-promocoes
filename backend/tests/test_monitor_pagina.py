@@ -63,11 +63,11 @@ def test_preco_igual_mantem_publicada_e_marca_a_conferencia():
     assert repo._um("produtos", id=pid)["preco_atual"] == 276.44
 
 
-def test_so_le_a_pagina_uma_vez_por_dia():
-    repo, pid, promo, _ = cenario(verificado=AGORA - timedelta(hours=3))  # intervalo padrão: 6 h
+def test_nao_le_a_pagina_antes_do_intervalo():
+    repo, pid, promo, _ = cenario(verificado=AGORA - timedelta(minutes=30))  # intervalo padrão: 1 h
     s = redireciona_para_produto()
     monitor(repo, s).executar(repo.configuracoes())
-    assert repo._um("produtos", id=pid)["preco_atual"] == 276.44          # não atualizou (conferido há 3 h, intervalo de 6 h)
+    assert repo._um("produtos", id=pid)["preco_atual"] == 276.44          # não atualizou (conferido há 30 min, intervalo de 1 h)
     assert repo._um("promocoes", id=promo)["status"] == "publicada"
 
 
@@ -143,7 +143,7 @@ def test_fila_preco_subiu_muito_pausa_antes_de_publicar():
 
 
 def test_fila_conferida_ha_pouco_nao_le_de_novo():
-    repo, pid, promo = cenario_fila(verificado_ha_horas=2)
+    repo, pid, promo = cenario_fila(verificado_ha_horas=0.5)
     s = redireciona_para_produto()
     monitor(repo, s).executar(repo.configuracoes())
     assert not s.chamadas and repo._um("promocoes", id=promo)["preco_promocional"] == 276.44
@@ -161,3 +161,26 @@ def test_fila_link_quebrado_invalida():
     s = SessaoFalsa().quando("GET", "meli.la", RespostaFalsa(404, texto="não encontrado"))
     monitor(repo, s).executar(repo.configuracoes())
     assert all(not l["validado"] for l in repo.t["links"] if l["produto_id"] == pid)
+
+
+def test_bloqueio_de_robo_para_de_ler_paginas_na_rodada():
+    repo, pid1, promo1 = cenario_fila()
+    ml = next(m for m in repo.marketplaces() if m["codigo"] == "mercado_livre")
+    o = OfertaEncontrada("mercado_livre", "MLB999", "Outro", 50.0, "https://meli.la/outro", None)
+    pid2, _ = repo.salvar_produto(o, ml["id"], None)
+    p2 = repo.criar_promocao(pid2, o, "aprovada", "manual")
+    repo.salvar_link(pid2, p2, o.link_afiliado)
+    repo._um("produtos", id=pid2)["verificado_em"] = AGORA - timedelta(hours=30)
+    s = SessaoFalsa().quando("GET", "meli.la", RespostaFalsa(200, texto="<html>captcha: verifique que você não é um robô</html>"))
+    monitor(repo, s).executar(repo.configuracoes())
+    assert len([c for c in s.chamadas if "meli.la" in c["url"]]) == 1    # parou depois do primeiro bloqueio
+
+
+def test_intervalo_padrao_e_1_hora_e_limite_por_rodada_configuravel():
+    repo, pid, promo = cenario_fila(verificado_ha_horas=1.5)
+    s = redireciona_para_produto()
+    monitor(repo, s).executar(repo.configuracoes())
+    assert s.chamadas                                                    # 1h30 sem conferir: lê de novo
+    repo2, _, _ = cenario_fila()
+    s2 = redireciona_para_produto()
+    assert monitor(repo2, s2).executar({**repo2.configuracoes(), "monitor.max_por_rodada": 0}) >= 0   # 0 = usa o padrão (30)

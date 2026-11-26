@@ -59,4 +59,12 @@ begin
     raise exception using errcode = 'TT000';
   exception when sqlstate 'TT000' then null; when others then ok := false; detalhe := sqlerrm; end;
   return next;
+
+  teste := 'preços acompanhados o tempo todo: conferência a cada 1 h (mínimo 1), 30 dias, 30 por rodada, fila ligada';
+  ok := (select valor = '1'::jsonb and minimo = 1 from public.configuracoes where chave = 'monitor.intervalo_pagina_horas')
+        and (select valor = '30'::jsonb from public.configuracoes where chave = 'monitor.acompanhar_dias')
+        and (select valor = '30'::jsonb from public.configuracoes where chave = 'monitor.max_por_rodada')
+        and (select valor = 'true'::jsonb from public.configuracoes where chave = 'monitor.conferir_fila');
+  detalhe := null;
+  return next;
 end $$;
