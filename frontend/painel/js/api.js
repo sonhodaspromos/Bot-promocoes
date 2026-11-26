@@ -59,3 +59,17 @@ export async function publicarAgora() {
   if (!r.ok) throw new Error(corpo.erro || `Falha ao disparar (HTTP ${r.status}).`);
   return corpo.mensagem;
 }
+
+/** "Puxar dados": título, foto e preços da página do produto a partir do link de afiliado. */
+export async function puxarDados(url, marketplace) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error("Faça login de novo.");
+  const r = await fetch(`${SUPABASE_URL}/functions/v1/puxar-dados`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_CHAVE_PUBLICA, "Content-Type": "application/json" },
+    body: JSON.stringify({ url, marketplace }),
+  });
+  const corpo = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(corpo.erro || `Não deu para puxar os dados (HTTP ${r.status}).`);
+  return corpo;
+}

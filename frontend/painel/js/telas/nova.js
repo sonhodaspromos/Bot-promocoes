@@ -1,6 +1,6 @@
 // Nova oferta manual (Mercado Livre e lojas sem API). O link é validado pelo sistema antes de publicar.
-import { publicarAgora, q } from "../api.js";
-import { $, aviso, esc, numero } from "../ui.js";
+import { publicarAgora, puxarDados, q } from "../api.js";
+import { $, aviso, brl, esc, numero } from "../ui.js";
 
 export async function montar(el, ctx) {
   if (!ctx.podeEditar) { el.innerHTML = '<div class="card">Apenas dono ou editor cadastram ofertas.</div>'; return; }
@@ -17,6 +17,8 @@ export async function montar(el, ctx) {
       <select id="n-loja" required>${lojas.map((l) => `<option value="${esc(l.codigo)}">${esc(l.nome)}</option>`).join("")}</select>
       <p class="ajuda" id="n-dominios"></p>
       <label for="n-link">Link de afiliado</label><input id="n-link" type="url" inputmode="url" placeholder="https://…" required>
+      <button class="b p grande" type="button" id="n-puxar" style="margin-top:8px">✨ Puxar dados do produto</button>
+      <div id="n-previa" class="previa-produto hide"></div>
       <label for="n-titulo">Título do produto</label><input id="n-titulo" maxlength="300" minlength="3" required>
       <div class="linha">
         <div><label for="n-preco">Preço (R$)</label><input id="n-preco" inputmode="decimal" placeholder="99,90" required></div>
@@ -39,6 +41,30 @@ export async function montar(el, ctx) {
   $("#n-loja", el).addEventListener("change", mostrarDominios);
   mostrarDominios();
 
+  const moeda = (v) => (v ? Number(v).toFixed(2).replace(".", ",") : "");
+  $("#n-puxar", el).addEventListener("click", async () => {
+    const link = $("#n-link", el).value.trim();
+    if (!/^https:\/\//i.test(link)) return aviso("Cole primeiro o link de afiliado.", "erro");
+    const botao = $("#n-puxar", el);
+    botao.disabled = true; botao.textContent = "Buscando na loja…";
+    try {
+      const d = await puxarDados(link, $("#n-loja", el).value);
+      if (d.titulo) $("#n-titulo", el).value = d.titulo;
+      if (d.preco) $("#n-preco", el).value = moeda(d.preco);
+      $("#n-antigo", el).value = moeda(d.preco_antigo);
+      if (/^https:\/\//.test(d.imagem_url || "")) $("#n-img", el).value = d.imagem_url;
+      if (d.id_externo) $("#n-id", el).value = d.id_externo;
+      const foto = /^https:\/\//.test(d.imagem_url || "") ? `<img src="${esc(d.imagem_url)}" alt="" referrerpolicy="no-referrer">` : '<div class="sem-foto"></div>';
+      const p = $("#n-previa", el);
+      p.innerHTML = `${foto}<div><b>${esc(d.titulo || "Sem título")}</b><div>${d.preco ? brl(d.preco) : "preço não encontrado"}
+        ${d.preco_antigo ? ` <s class="m">${brl(d.preco_antigo)}</s>` : ""}</div>
+        <div class="m">Confira os campos abaixo antes de salvar.</div></div>`;
+      p.classList.remove("hide");
+      aviso(d.preco ? "Dados preenchidos ✔ confira antes de salvar" : "Achei o produto, mas não o preço: preencha à mão.");
+    } catch (e) { aviso(e.message, "erro"); }
+    botao.disabled = false; botao.textContent = "✨ Puxar dados do produto";
+  });
+
   $("#form-nova", el).addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const preco = numero($("#n-preco", el).value);
@@ -59,6 +85,7 @@ export async function montar(el, ctx) {
       }
       aviso(msg);
       ["#n-link", "#n-titulo", "#n-preco", "#n-antigo", "#n-img", "#n-id"].forEach((s) => ($(s, el).value = ""));
+      $("#n-previa", el).classList.add("hide");
     } catch (e) { aviso(e.message, "erro"); }
     botao.disabled = false;
   });
